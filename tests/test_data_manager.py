@@ -1,10 +1,11 @@
 """data_manager 模块测试:加解密往返、CRUD、备份恢复、迁移、#1 回归。"""
 import json
+
 import pytest
 from cryptography.fernet import Fernet
 
-from data_manager import DataManager
-from models import RecordManager, AccountPassword
+from suibianji.core.data_manager import DataManager
+from suibianji.core.models import AccountPassword, RecordManager
 
 
 # ---------- 主密码设置 / 验证 ----------
@@ -23,7 +24,7 @@ def test_verify_password_returns_false_when_not_setup(data_manager):
 def test_wrong_password_load_raises(data_manager):
     data_manager.initialize_first_time("correct-pw")
     dm2 = DataManager(data_dir=data_manager.data_dir)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017 故意验证"密码错误必须抛出"
         dm2.initialize_with_password("wrong-pw")
 
 
@@ -74,7 +75,7 @@ def test_accounts_edit_fields_contains_password_and_notes():
     """UI 配置契约:accounts 的 edit_fields 必须包含 password/notes,
     防止 _add_item/_edit_item 再次用表格显示字段组装参数。"""
     try:
-        from main_qt6_redesigned import SuibianjiApp
+        from suibianji.ui.main_window import SuibianjiApp
     except ImportError:
         pytest.skip("PyQt6 不可用,跳过 UI 配置测试")
 
@@ -211,7 +212,7 @@ def test_import_legacy_data_replaces_with_backup(data_manager, tmp_path):
 # ---------- 滚动备份 ----------
 def test_rolling_backup_keeps_latest_copies(data_manager):
     """每次保存都应生成一份时间戳备份,且数量被限制在 BACKUP_KEEP。"""
-    from data_manager import BACKUP_KEEP
+    from suibianji.core.data_manager import BACKUP_KEEP
 
     data_manager.initialize_first_time("pw123456")
     for i in range(BACKUP_KEEP + 5):

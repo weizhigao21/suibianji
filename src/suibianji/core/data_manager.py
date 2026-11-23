@@ -1,19 +1,18 @@
-import os
-import json
-import uuid
-import shutil
-import secrets
 import base64
+import json
 import logging
-from pathlib import Path
+import os
+import secrets
+import shutil
+import uuid
 from datetime import datetime
+from pathlib import Path
+
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from typing import Optional
 
-from models import RecordManager, AccountPassword, Idea, WalletAddress, AIPrompt
-
+from .models import AccountPassword, AIPrompt, Idea, RecordManager, WalletAddress
 
 try:
     import keyring
@@ -48,8 +47,8 @@ class DataManager:
         self.salt_file = self.data_dir / ".salt"
         self.verify_file = self.data_dir / ".verify"
         self.legacy_key_file = self.data_dir / ".key"
-        self.cipher: Optional[Fernet] = None
-        self.record_manager: Optional[RecordManager] = None
+        self.cipher: Fernet | None = None
+        self.record_manager: RecordManager | None = None
         # 上次改密若在写文件中途崩溃,这里先回滚到改密前的完整状态
         self._recover_interrupted_password_change()
 
@@ -115,7 +114,7 @@ class DataManager:
         except Exception:
             return False
 
-    def get_cached_password(self) -> Optional[str]:
+    def get_cached_password(self) -> str | None:
         """从系统钥匙串读取主密码。"""
         if not KEYRING_AVAILABLE:
             return None
@@ -267,7 +266,7 @@ class DataManager:
     # ---------- 数据加载/保存 ----------
     def _load_data(self):
         """按 主文件 → .bak → 滚动备份(由新到旧) 的顺序尝试解密。"""
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for path in self._candidate_files():
             if not path.exists():
                 continue
@@ -322,7 +321,7 @@ class DataManager:
 
     # ---------- CRUD ----------
     def add_account(self, account_type: str, website: str, username: str, password: str,
-                    url: Optional[str] = None, notes: Optional[str] = None) -> AccountPassword:
+                    url: str | None = None, notes: str | None = None) -> AccountPassword:
         account = AccountPassword(
             id=str(uuid.uuid4()),
             account_type=account_type,
@@ -336,7 +335,7 @@ class DataManager:
         self._save_data()
         return account
 
-    def update_account(self, account_id: str, **kwargs) -> Optional[AccountPassword]:
+    def update_account(self, account_id: str, **kwargs) -> AccountPassword | None:
         for account in self.record_manager.accounts:
             if account.id == account_id:
                 for key, value in kwargs.items():
@@ -368,7 +367,7 @@ class DataManager:
         self._save_data()
         return idea
 
-    def update_idea(self, idea_id: str, **kwargs) -> Optional[Idea]:
+    def update_idea(self, idea_id: str, **kwargs) -> Idea | None:
         for idea in self.record_manager.ideas:
             if idea.id == idea_id:
                 for key, value in kwargs.items():
@@ -390,7 +389,7 @@ class DataManager:
         return False
 
     def add_wallet(self, name: str, address: str, wallet_type: str,
-                   notes: Optional[str] = None) -> WalletAddress:
+                   notes: str | None = None) -> WalletAddress:
         wallet = WalletAddress(
             id=str(uuid.uuid4()),
             name=name,
@@ -402,7 +401,7 @@ class DataManager:
         self._save_data()
         return wallet
 
-    def update_wallet(self, wallet_id: str, **kwargs) -> Optional[WalletAddress]:
+    def update_wallet(self, wallet_id: str, **kwargs) -> WalletAddress | None:
         for wallet in self.record_manager.wallets:
             if wallet.id == wallet_id:
                 for key, value in kwargs.items():
@@ -436,7 +435,7 @@ class DataManager:
         self._save_data()
         return prompt
 
-    def update_prompt(self, prompt_id: str, **kwargs) -> Optional[AIPrompt]:
+    def update_prompt(self, prompt_id: str, **kwargs) -> AIPrompt | None:
         for prompt in self.record_manager.prompts:
             if prompt.id == prompt_id:
                 for key, value in kwargs.items():

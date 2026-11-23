@@ -5,7 +5,7 @@
 """
 
 import hashlib
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from PyQt6.QtCore import QObject
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -20,11 +20,11 @@ def socket_name(data_dir) -> str:
 
 
 class SingleInstanceGuard(QObject):
-    def __init__(self, name: str, on_activate: Optional[Callable[[], None]] = None, parent=None):
+    def __init__(self, name: str, on_activate: Callable[[], None] | None = None, parent=None):
         super().__init__(parent)
         self._name = name
         self._on_activate = on_activate
-        self._server: Optional[QLocalServer] = None
+        self._server: QLocalServer | None = None
 
     def acquire(self) -> bool:
         """返回 True 表示本进程是唯一实例;False 表示已通知并唤醒了旧实例。"""

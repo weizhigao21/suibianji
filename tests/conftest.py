@@ -1,17 +1,7 @@
-"""pytest 共享配置。
-
-data_manager.py 使用绝对导入 (from models import ...),
-需把 src 目录加入 sys.path,使测试能 import src 下模块。
-"""
-import sys
-from pathlib import Path
-
-SRC_DIR = Path(__file__).parent.parent / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
+"""pytest 共享配置:包已安装/由 pyproject 的 pythonpath 提供,不再手工改 sys.path。"""
 import pytest
-from data_manager import DataManager
+
+from suibianji.core.data_manager import DataManager
 
 
 @pytest.fixture

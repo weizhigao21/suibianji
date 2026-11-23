@@ -1,6 +1,6 @@
 """程序图标:全部用 QPainter 矢量绘制,无需外部图片资源。"""
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import (
     QColor,
     QIcon,
