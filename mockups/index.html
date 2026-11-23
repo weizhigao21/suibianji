@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>随便记 · UI 重设计方案预览</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 56px 24px 80px;
+    background: #f2efe8;
+    color: #26251f;
+    font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .kicker { font-size: 10px; letter-spacing: .22em; font-weight: 700; color: #7c8b78; margin-bottom: 12px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 12px; font-weight: 720; letter-spacing: -.02em; }
+  .lead { font-size: 13.5px; line-height: 1.8; color: #6f6b5f; margin: 0 0 12px; }
+  .note {
+    display: flex; gap: 9px; align-items: flex-start;
+    font-size: 11.5px; line-height: 1.7; color: #837e70;
+    padding: 12px 14px; border: 1px solid #e4dfd2; border-radius: 10px;
+    background: rgba(255, 255, 255, .55); margin-top: 18px;
+  }
+  .note svg { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; opacity: .75; }
+  .list { display: flex; flex-direction: column; gap: 30px; margin-top: 36px; }
+  .card {
+    background: #fffdf8; border: 1px solid #e7e1d4; border-radius: 18px;
+    padding: 18px; box-shadow: 0 2px 3px rgba(40, 38, 30, .03), 0 18px 40px rgba(40, 38, 30, .05);
+  }
+  .card-head { display: flex; align-items: flex-start; gap: 14px; padding: 2px 4px 16px; }
+  .index {
+    width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto;
+    display: grid; place-items: center; font-size: 13px; font-weight: 700;
+    background: #eef1ea; color: #2f5d50;
+  }
+  .card:nth-child(2) .index { background: #eceefe; color: #5a63d8; }
+  .card:nth-child(3) .index { background: #f7e9da; color: #aa5226; }
+  .card-title { font-size: 17px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
+  .card-desc { font-size: 12px; color: #777264; line-height: 1.65; margin: 0; }
+  .swatches { display: flex; gap: 5px; margin-left: auto; padding-top: 4px; flex: 0 0 auto; }
+  .swatch { width: 18px; height: 18px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, .06); }
+  .preview {
+    position: relative; width: 100%; aspect-ratio: 16 / 10; overflow: hidden;
+    border-radius: 12px; border: 1px solid #ebe5d8; background: #f6f3ec;
+  }
+  .preview iframe {
+    width: 1280px; height: 800px; border: 0; display: block;
+    transform: scale(.5); transform-origin: top left; pointer-events: none;
+  }
+  .preview a { position: absolute; inset: 0; display: block; }
+  .preview a::after {
+    content: "打开完整原型 →"; position: absolute; right: 12px; bottom: 12px;
+    font-size: 10.5px; font-weight: 600; color: #fff; background: rgba(30, 29, 24, .72);
+    padding: 6px 10px; border-radius: 999px; opacity: 0; transition: opacity .18s;
+  }
+  .preview a:hover::after { opacity: 1; }
+  .card-foot { display: flex; align-items: center; gap: 10px; padding: 14px 4px 2px; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    font-size: 10.5px; padding: 3px 9px; border-radius: 999px;
+    background: #f4f1e8; color: #6f6b5c; border: 1px solid #ece7da;
+  }
+  .open { margin-left: auto; font-size: 11.5px; color: #2f5d50; font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .card:nth-child(2) .open { color: #5a63d8; }
+  .card:nth-child(3) .open { color: #aa5226; }
+  .open:hover { text-decoration: underline; }
+  .foot { margin-top: 34px; font-size: 10.5px; color: #9a9484; text-align: center; line-height: 1.8; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="kicker">SUIBIANJI · UI DIRECTIONS</div>
+    <h1>随便记，重新换一种气质</h1>
+    <p class="lead">三套完整界面方案，覆盖主列表、分类切换、添加/编辑弹窗与设置面板。点开任意一套，可以直接搜索、切换分类、增删记录，感受真实交互。</p>
+    <div class="note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v4h1"/></svg>
+      <span>这是 HTML 静态原型，用于先确定视觉方向，暂未改动 PyQt6 代码。选定方案后我再把它翻译成 QSS 落地到现有程序。</span>
+    </div>
+
+    <div class="list">
+      <section class="card">
+        <div class="card-head">
+          <div class="index">A</div>
+          <div>
+            <h3 class="card-title">纸间 · Paperlight</h3>
+            <p class="card-desc">暖白纸感底色、墨绿点缀、轻描边表格。克制安静，像一本可以随手翻开的私人册子。</p>
+          </div>
+          <div class="swatches">
+            <span class="swatch" style="background:#faf8f3"></span>
+            <span class="swatch" style="background:#2f5d50"></span>
+            <span class="swatch" style="background:#22221e"></span>
+            <span class="swatch" style="background:#ece7da"></span>
+          </div>
+        </div>
+        <div class="preview">
+          <iframe src="theme-a.html" title="方案 A 纸间"></iframe>
+          <a href="theme-a.html" aria-label="打开方案 A"></a>
+        </div>
+        <div class="card-foot">
+          <div class="tags"><span class="tag">浅色</span><span class="tag">低饱和</span><span class="tag">长时间阅读</span></div>
+          <a class="open" href="theme-a.html">打开完整原型 →</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="index">B</div>
+          <div>
+            <h3 class="card-title">深夜 · Midnight</h3>
+            <p class="card-desc">深灰工作台、靛蓝强调、密度更高的列表。夜间使用不刺眼，有一点专业工具的冷静感。</p>
+          </div>
+          <div class="swatches">
+            <span class="swatch" style="background:#0b0d12"></span>
+            <span class="swatch" style="background:#6d7bff"></span>
+            <span class="swatch" style="background:#e7ebf3"></span>
+            <span class="swatch" style="background:#202634"></span>
+          </div>
+        </div>
+        <div class="preview">
+          <iframe src="theme-b.html" title="方案 B 深夜"></iframe>
+          <a href="theme-b.html" aria-label="打开方案 B"></a>
+        </div>
+        <div class="card-foot">
+          <div class="tags"><span class="tag">深色</span><span class="tag">高对比</span><span class="tag">效率优先</span></div>
+          <a class="open" href="theme-b.html">打开完整原型 →</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="index">C</div>
+          <div>
+            <h3 class="card-title">陶土 · Terra</h3>
+            <p class="card-desc">陶土色侧栏、奶油色卡片、圆角与柔和阴影。更温暖亲和，像桌面上一件有手作感的物件。</p>
+          </div>
+          <div class="swatches">
+            <span class="swatch" style="background:#f6f1e7"></span>
+            <span class="swatch" style="background:#8a4a31"></span>
+            <span class="swatch" style="background:#c2612f"></span>
+            <span class="swatch" style="background:#ede1d1"></span>
+          </div>
+        </div>
+        <div class="preview">
+          <iframe src="theme-c.html" title="方案 C 陶土"></iframe>
+          <a href="theme-c.html" aria-label="打开方案 C"></a>
+        </div>
+        <div class="card-foot">
+          <div class="tags"><span class="tag">暖色</span><span class="tag">圆润</span><span class="tag">亲和感</span></div>
+          <a class="open" href="theme-c.html">打开完整原型 →</a>
+        </div>
+      </section>
+    </div>
+
+    <div class="foot">原型中的记录均为演示数据 · 数据不会写入本地文件</div>
+  </div>
+</body>
+</html>

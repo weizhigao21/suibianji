@@ -1,0 +1,389 @@
+import os
+import json
+import uuid
+import shutil
+import secrets
+import base64
+import logging
+from pathlib import Path
+from datetime import datetime
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from typing import Optional
+
+from models import RecordManager, AccountPassword, Idea, WalletAddress, AIPrompt
+
+
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except Exception:
+    keyring = None
+    KEYRING_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
+
+# keyring 凭据标识
+KEYRING_SERVICE = "suibianji"
+KEYRING_USERNAME = "master_password"
+
+
+# 主密码派生参数
+PBKDF2_ITERATIONS = 600_000
+# 滚动备份保留份数(每次保存前生成一份,超出后删除最旧的)
+BACKUP_KEEP = 7
+# 验证 token:用派生密钥加密此固定字符串,解密后匹配则密码正确
+VERIFICATION_TOKEN = b"SUIBIANJI_VERIFICATION_TOKEN_v1"
+
+
+class DataManager:
+    def __init__(self, data_dir: str = "data"):
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(exist_ok=True)
+        self.data_file = self.data_dir / "records.enc"
+        self.backup_file = self.data_dir / "records.enc.bak"
+        self.backups_dir = self.data_dir / "backups"
+        self.salt_file = self.data_dir / ".salt"
+        self.verify_file = self.data_dir / ".verify"
+        self.legacy_key_file = self.data_dir / ".key"
+        self.cipher: Optional[Fernet] = None
+        self.record_manager: Optional[RecordManager] = None
+
+    # ---------- 密钥派生 ----------
+    def _derive_key(self, password: str, salt: bytes) -> bytes:
+        """用主密码 + salt 派生 Fernet 密钥。"""
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=PBKDF2_ITERATIONS,
+        )
+        return base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+
+    def _generate_salt(self) -> bytes:
+        return secrets.token_bytes(16)
+
+    # ---------- 底层 IO ----------
+    def _read_bytes(self, path: Path) -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
+
+    def _atomic_write(self, path: Path, data: bytes):
+        """原子写入:写临时文件 + fsync + os.replace,避免崩溃导致数据损坏。"""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+    # ---------- 主密码设置 / 验证 ----------
+    def _write_verification(self):
+        """写入验证 token(用当前 cipher 加密)。"""
+        token = self.cipher.encrypt(VERIFICATION_TOKEN)
+        self._atomic_write(self.verify_file, token)
+
+    def verify_password(self, password: str) -> bool:
+        """验证主密码是否正确。"""
+        if not self.salt_file.exists() or not self.verify_file.exists():
+            return False
+        try:
+            salt = self._read_bytes(self.salt_file)
+            key = self._derive_key(password, salt)
+            cipher = Fernet(key)
+            token = self._read_bytes(self.verify_file)
+            return cipher.decrypt(token) == VERIFICATION_TOKEN
+        except (InvalidToken, Exception):
+            return False
+
+    # ---------- keyring 缓存主密码 ----------
+    @classmethod
+    def is_keyring_available(cls) -> bool:
+        return KEYRING_AVAILABLE
+
+    def cache_password(self, password: str) -> bool:
+        """将主密码存入系统钥匙串。"""
+        if not KEYRING_AVAILABLE:
+            return False
+        try:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, password)
+            return True
+        except Exception:
+            return False
+
+    def get_cached_password(self) -> Optional[str]:
+        """从系统钥匙串读取主密码。"""
+        if not KEYRING_AVAILABLE:
+            return None
+        try:
+            return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        except Exception:
+            return None
+
+    def clear_cached_password(self) -> bool:
+        """从系统钥匙串删除主密码。"""
+        if not KEYRING_AVAILABLE:
+            return False
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+            return True
+        except Exception:
+            return False
+
+    def _setup_new_password(self, password: str):
+        """为新主密码生成 salt + 验证 token,并设置 self.cipher。"""
+        salt = self._generate_salt()
+        self._atomic_write(self.salt_file, salt)
+        self.cipher = Fernet(self._derive_key(password, salt))
+        self._write_verification()
+
+    # ---------- 启动入口 ----------
+    def has_legacy_key(self) -> bool:
+        """是否使用旧版 .key 密钥文件模式(无需主密码)。"""
+        return self.legacy_key_file.exists() and not self.salt_file.exists()
+
+    def is_first_time(self) -> bool:
+        """是否首次使用(既无 salt 也无 legacy key)。"""
+        return not self.salt_file.exists() and not self.legacy_key_file.exists()
+
+    def initialize_with_legacy_key(self):
+        """用 .key 直接解密并加载数据,写入时保持同样的密钥文件格式。"""
+        key = self._read_bytes(self.legacy_key_file).strip()
+        self.cipher = Fernet(key)
+        self._load_data()
+
+    def import_legacy_data(self, source_dir, replace: bool = False) -> bool:
+        """把旧版 data 目录的 .key / records.enc 复制到当前目录。
+
+        replace=True 时先把当前目录的加密数据移到 backup-时间戳 子目录,
+        避免覆盖用户已有记录。
+        """
+        source = Path(source_dir)
+        source_key = source / ".key"
+        if not source_key.exists():
+            return False
+        if not replace and (self.salt_file.exists() or self.legacy_key_file.exists()):
+            return False
+
+        if replace and (self.salt_file.exists() or self.data_file.exists()):
+            backup_dir = self.data_dir / f"backup-{datetime.now():%Y%m%d-%H%M%S}"
+            backup_dir.mkdir(exist_ok=True)
+            for path in (self.salt_file, self.verify_file, self.data_file, self.backup_file):
+                if path.exists():
+                    shutil.move(str(path), str(backup_dir / path.name))
+
+        self._atomic_write(self.legacy_key_file, source_key.read_bytes())
+        source_records = source / "records.enc"
+        if source_records.exists():
+            self._atomic_write(self.data_file, source_records.read_bytes())
+        source_backup = source / "records.enc.bak"
+        if source_backup.exists():
+            self._atomic_write(self.backup_file, source_backup.read_bytes())
+        return True
+
+    def initialize_first_time(self, password: str):
+        """首次使用:设置主密码并写入空记录。"""
+        self._setup_new_password(password)
+        self.record_manager = RecordManager()
+        self._save_data()
+
+    def initialize_with_password(self, password: str):
+        """已验证密码后,加载数据。"""
+        salt = self._read_bytes(self.salt_file)
+        self.cipher = Fernet(self._derive_key(password, salt))
+        self._load_data()
+
+    # ---------- 数据加载/保存 ----------
+    def _load_data(self):
+        """按 主文件 → .bak → 滚动备份(由新到旧) 的顺序尝试解密。"""
+        last_error: Optional[Exception] = None
+        for path in self._candidate_files():
+            if not path.exists():
+                continue
+            try:
+                encrypted = self._read_bytes(path)
+                decrypted = self.cipher.decrypt(encrypted)
+                data = json.loads(decrypted.decode("utf-8"))
+                self.record_manager = RecordManager.from_dict(data)
+            except Exception as e:
+                last_error = e
+                continue
+            if path != self.data_file:
+                logger.warning("主文件不可用(%s),已从 %s 恢复", last_error, path.name)
+            return
+
+        if self.data_file.exists():
+            raise ValueError(f"数据解密失败:密钥不匹配或文件已损坏 ({last_error})")
+        self.record_manager = RecordManager()
+
+    def _candidate_files(self):
+        """可用于恢复的文件,按优先级排列。"""
+        candidates = [self.data_file, self.backup_file]
+        candidates.extend(sorted(self.backups_dir.glob("records-*.enc"), reverse=True)
+                          if self.backups_dir.exists() else [])
+        return candidates
+
+    def _write_rotating_backup(self, payload: bytes):
+        """把当前密文另存为带时间戳的备份,并清理超出保留份数的旧备份。"""
+        backups = sorted(self.backups_dir.glob("records-*.enc"), reverse=True)
+        self.backups_dir.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        self._atomic_write(self.backups_dir / f"records-{stamp}.enc", payload)
+        for old in backups[BACKUP_KEEP - 1:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+    def _save_data(self):
+        data = self.record_manager.to_dict()
+        json_data = json.dumps(data, ensure_ascii=False, indent=2)
+        encrypted = self.cipher.encrypt(json_data.encode("utf-8"))
+        # 先备份当前文件(.bak + 时间戳滚动备份),再原子写入新数据
+        if self.data_file.exists():
+            try:
+                current = self._read_bytes(self.data_file)
+                self._atomic_write(self.backup_file, current)
+                self._write_rotating_backup(current)
+            except Exception as e:
+                logger.warning("写入备份失败,继续保存主文件: %s", e)
+        self._atomic_write(self.data_file, encrypted)
+
+    # ---------- CRUD ----------
+    def add_account(self, account_type: str, website: str, username: str, password: str,
+                    url: Optional[str] = None, notes: Optional[str] = None) -> AccountPassword:
+        account = AccountPassword(
+            id=str(uuid.uuid4()),
+            account_type=account_type,
+            website=website,
+            username=username,
+            password=password,
+            url=url,
+            notes=notes
+        )
+        self.record_manager.accounts.append(account)
+        self._save_data()
+        return account
+
+    def update_account(self, account_id: str, **kwargs) -> Optional[AccountPassword]:
+        for account in self.record_manager.accounts:
+            if account.id == account_id:
+                for key, value in kwargs.items():
+                    if hasattr(account, key):
+                        setattr(account, key, value)
+                account.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._save_data()
+                return account
+        return None
+
+    def delete_account(self, account_id: str) -> bool:
+        before = len(self.record_manager.accounts)
+        self.record_manager.accounts = [
+            acc for acc in self.record_manager.accounts if acc.id != account_id
+        ]
+        if len(self.record_manager.accounts) != before:
+            self._save_data()
+            return True
+        return False
+
+    def add_idea(self, title: str, content: str, tags: list = None) -> Idea:
+        idea = Idea(
+            id=str(uuid.uuid4()),
+            title=title,
+            content=content,
+            tags=tags or []
+        )
+        self.record_manager.ideas.append(idea)
+        self._save_data()
+        return idea
+
+    def update_idea(self, idea_id: str, **kwargs) -> Optional[Idea]:
+        for idea in self.record_manager.ideas:
+            if idea.id == idea_id:
+                for key, value in kwargs.items():
+                    if hasattr(idea, key):
+                        setattr(idea, key, value)
+                idea.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._save_data()
+                return idea
+        return None
+
+    def delete_idea(self, idea_id: str) -> bool:
+        before = len(self.record_manager.ideas)
+        self.record_manager.ideas = [
+            idea for idea in self.record_manager.ideas if idea.id != idea_id
+        ]
+        if len(self.record_manager.ideas) != before:
+            self._save_data()
+            return True
+        return False
+
+    def add_wallet(self, name: str, address: str, wallet_type: str,
+                   notes: Optional[str] = None) -> WalletAddress:
+        wallet = WalletAddress(
+            id=str(uuid.uuid4()),
+            name=name,
+            address=address,
+            wallet_type=wallet_type,
+            notes=notes
+        )
+        self.record_manager.wallets.append(wallet)
+        self._save_data()
+        return wallet
+
+    def update_wallet(self, wallet_id: str, **kwargs) -> Optional[WalletAddress]:
+        for wallet in self.record_manager.wallets:
+            if wallet.id == wallet_id:
+                for key, value in kwargs.items():
+                    if hasattr(wallet, key):
+                        setattr(wallet, key, value)
+                wallet.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._save_data()
+                return wallet
+        return None
+
+    def delete_wallet(self, wallet_id: str) -> bool:
+        before = len(self.record_manager.wallets)
+        self.record_manager.wallets = [
+            wallet for wallet in self.record_manager.wallets if wallet.id != wallet_id
+        ]
+        if len(self.record_manager.wallets) != before:
+            self._save_data()
+            return True
+        return False
+
+    def add_prompt(self, title: str, content: str, category: str = "",
+                   tags: list = None) -> AIPrompt:
+        prompt = AIPrompt(
+            id=str(uuid.uuid4()),
+            title=title,
+            content=content,
+            category=category,
+            tags=tags or []
+        )
+        self.record_manager.prompts.append(prompt)
+        self._save_data()
+        return prompt
+
+    def update_prompt(self, prompt_id: str, **kwargs) -> Optional[AIPrompt]:
+        for prompt in self.record_manager.prompts:
+            if prompt.id == prompt_id:
+                for key, value in kwargs.items():
+                    if hasattr(prompt, key):
+                        setattr(prompt, key, value)
+                prompt.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._save_data()
+                return prompt
+        return None
+
+    def delete_prompt(self, prompt_id: str) -> bool:
+        before = len(self.record_manager.prompts)
+        self.record_manager.prompts = [
+            prompt for prompt in self.record_manager.prompts if prompt.id != prompt_id
+        ]
+        if len(self.record_manager.prompts) != before:
+            self._save_data()
+            return True
+        return False
