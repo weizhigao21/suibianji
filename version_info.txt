@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 4, 0, 0),
-    prodvers=(1, 4, 0, 0),
+    filevers=(1, 5, 0, 0),
+    prodvers=(1, 5, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'weizhigao21'),
             StringStruct('FileDescription', '随便记 - 本地加密个人记录管理器'),
-            StringStruct('FileVersion', '1.4.0'),
+            StringStruct('FileVersion', '1.5.0'),
             StringStruct('InternalName', 'suibianji'),
             StringStruct('LegalCopyright', '© 2026 weizhigao21'),
             StringStruct('OriginalFilename', '随便记.exe'),
             StringStruct('ProductName', '随便记'),
-            StringStruct('ProductVersion', '1.4.0')
+            StringStruct('ProductVersion', '1.5.0')
           ]
         )
       ]

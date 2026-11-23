@@ -102,7 +102,9 @@ pip install pyinstaller
 pyinstaller suibianji.spec
 ```
 
-打包产物位于 `dist/随便记.exe`(Windows)或对应平台的可执行文件。
+产物是 onedir 文件夹 `dist/随便记/`:分发时要连同 `_internal/` 一起拷贝,EXE 不能单独拿走。
+
+启动耗时:onedir 相对旧的 onefile 省去每次启动把 40MB 解压到临时目录的过程,实测冷启动从约 1.6 秒降到约 0.6 秒(同一台机器、同一份数据、二次启动)。
 
 ## 项目结构
 

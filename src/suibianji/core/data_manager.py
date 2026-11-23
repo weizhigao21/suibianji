@@ -1,4 +1,5 @@
 import base64
+import importlib.util
 import json
 import logging
 import os
@@ -14,12 +15,29 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .models import AccountPassword, AIPrompt, Idea, RecordManager, WalletAddress
 
-try:
-    import keyring
-    KEYRING_AVAILABLE = True
-except Exception:
-    keyring = None
-    KEYRING_AVAILABLE = False
+# keyring 延迟导入:只在真正读写系统钥匙串时才加载(可省约 0.1s 启动时间)
+_keyring_module = None
+_keyring_state: bool | None = None
+
+
+def _load_keyring():
+    global _keyring_module, _keyring_state
+    if _keyring_state is None:
+        try:
+            import keyring
+            _keyring_module = keyring
+            _keyring_state = True
+        except Exception:
+            _keyring_module = None
+            _keyring_state = False
+    return _keyring_module
+
+
+def keyring_available() -> bool:
+    """是否可用系统钥匙串;未加载前只检查模块是否存在。"""
+    if _keyring_state is None:
+        return importlib.util.find_spec("keyring") is not None
+    return _keyring_state
 
 
 logger = logging.getLogger(__name__)
@@ -102,11 +120,12 @@ class DataManager:
     # ---------- keyring 缓存主密码 ----------
     @classmethod
     def is_keyring_available(cls) -> bool:
-        return KEYRING_AVAILABLE
+        return keyring_available()
 
     def cache_password(self, password: str) -> bool:
         """将主密码存入系统钥匙串。"""
-        if not KEYRING_AVAILABLE:
+        keyring = _load_keyring()
+        if keyring is None:
             return False
         try:
             keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, password)
@@ -116,7 +135,8 @@ class DataManager:
 
     def get_cached_password(self) -> str | None:
         """从系统钥匙串读取主密码。"""
-        if not KEYRING_AVAILABLE:
+        keyring = _load_keyring()
+        if keyring is None:
             return None
         try:
             return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
@@ -125,7 +145,8 @@ class DataManager:
 
     def clear_cached_password(self) -> bool:
         """从系统钥匙串删除主密码。"""
-        if not KEYRING_AVAILABLE:
+        keyring = _load_keyring()
+        if keyring is None:
             return False
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)

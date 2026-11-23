@@ -6,7 +6,7 @@ set "PYTHONIOENCODING=utf-8"
 title 随便记 一键打包
 cd /d "%~dp0"
 echo ============================================
-echo    随便记 一键打包 ^(PyInstaller 单文件^)
+echo    随便记 一键打包 ^(PyInstaller 文件夹版 onedir^)
 echo ============================================
 echo.
 
@@ -84,28 +84,31 @@ if errorlevel 1 (
 echo [4/5] 开始打包…
 %PYCMD% -m PyInstaller --noconfirm --clean suibianji.spec
 if errorlevel 1 goto fail
-if not exist "dist\随便记.exe" (
-    echo [错误] 未生成 dist\随便记.exe，请查看上方 PyInstaller 日志。
+if not exist "dist\随便记\随便记.exe" (
+    echo [错误] 未生成 dist\随便记\随便记.exe，请查看上方 PyInstaller 日志。
     goto fail
 )
 
 echo [5/5] 生成版本 ZIP…
-powershell -NoProfile -Command "Set-Location 'dist'; $exe = Get-ChildItem -Filter *.exe | Select-Object -First 1; if (-not $exe) { exit 1 }; Compress-Archive -LiteralPath $exe.Name -DestinationPath 'suibianji-1.2.0-win64.zip' -Force"
+for /f "tokens=2 delims== " %%v in ('findstr /c:"__version__" "src\suibianji\__init__.py"') do set "APPVER=%%~v"
+set "APPVER=%APPVER:"=%"
+if not defined APPVER set "APPVER=dev"
+powershell -NoProfile -Command "Set-Location 'dist'; Compress-Archive -Path '随便记' -DestinationPath ('suibianji-%APPVER%-win64.zip') -Force"
 if errorlevel 1 (
-    echo [提示] ZIP 生成失败，可直接分发 dist\随便记.exe。
+    echo [提示] ZIP 生成失败，可直接分发 dist\随便记 整个文件夹。
 ) else (
-    echo 版本 ZIP: %~dp0dist\suibianji-1.2.0-win64.zip
+    echo 版本 ZIP: %~dp0dist\suibianji-%APPVER%-win64.zip
 )
 
 echo.
 echo ============================================
 echo    打包完成！
 echo ============================================
-echo 产物目录: %~dp0dist\
-echo 主程序:   %~dp0dist\随便记.exe
-echo 版本 ZIP: %~dp0dist\suibianji-1.2.0-win64.zip
+echo 产物目录: %~dp0dist\随便记\
+echo 主程序:   %~dp0dist\随便记\随便记.exe
+echo 版本 ZIP: %~dp0dist\suibianji-%APPVER%-win64.zip
 echo.
-echo 请分发上面生成的 EXE 或版本 ZIP，首次运行无需安装 Python。
+echo 请分发 dist\随便记 整个文件夹（EXE 不能单独拷走），首次运行无需安装 Python。
 echo data 目录优先使用 exe 同级 data，不可写时回退到 %%APPDATA%%\Suibianji\data，已存在的记录不会被覆盖。
 echo 分发时不要打包 data 目录，避免把加密记录和设置一起发出去。
 echo 升级时保留旧 data 目录即可继续使用原主密码登录。

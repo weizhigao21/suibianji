@@ -56,4 +56,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: suibianji-win64
-          path: dist/随便记.exe
+          path: dist/随便记/

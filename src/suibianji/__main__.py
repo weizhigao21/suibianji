@@ -2,9 +2,13 @@
 
 import logging
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+
+# 尽量贴近进程启动的时刻,用于统计导入 + 建窗耗时
+_BOOT_T0 = time.perf_counter()
 
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -109,11 +113,16 @@ def _import_legacy_if_needed(data_manager: DataManager):
 
 
 def main():
+    started = _BOOT_T0
     data_dir = resolve_data_dir()
     _setup_logging(data_dir)
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setWindowIcon(app_icon())
+    log = logging.getLogger("suibianji.startup")
+    log.info("启动阶段: imports+Qt %d ms", int((time.perf_counter() - started) * 1000))
+    # 密码解锁/旧数据导入耗时
+    boot_after_qt = time.perf_counter()
 
     # 单实例:第二个进程唤醒第一个后直接退出,避免两个进程互相覆盖数据
     window_holder: dict[str, Any] = {}
@@ -160,7 +169,14 @@ def main():
 
     window = SuibianjiApp(data_manager, app_settings, current_password=password)
     window_holder["window"] = window
+    unlock_ms = int((time.perf_counter() - boot_after_qt) * 1000)
+    log.info(
+        "启动阶段: 解锁+数据+建窗 %d ms, 合计 %d ms",
+        unlock_ms,
+        int((time.perf_counter() - started) * 1000),
+    )
     window.show()
+    log.info("启动阶段: 窗口显示 %d ms", int((time.perf_counter() - started) * 1000))
 
     sys.exit(app.exec())
 
