@@ -32,6 +32,7 @@ class AppSettings:
             "remember_password_enabled": False,
             "remember_password_until": None,
             "account_types": list(DEFAULT_ACCOUNT_TYPES),
+            "ui_state": {},
         }
         if self.settings_file.exists():
             try:
@@ -99,6 +100,18 @@ class AppSettings:
     def clear_remember_period(self):
         """登出/清除缓存时调用。"""
         self._data["remember_password_until"] = None
+        self._save()
+
+    # ---------- 界面状态(窗口位置、列宽、上次分类) ----------
+    @property
+    def ui_state(self) -> dict:
+        state = self._data.get("ui_state")
+        return dict(state) if isinstance(state, dict) else {}
+
+    def update_ui_state(self, **values):
+        state = self.ui_state
+        state.update(values)
+        self._data["ui_state"] = state
         self._save()
 
     # ---------- 账号类型 ----------

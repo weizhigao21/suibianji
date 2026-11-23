@@ -75,3 +75,49 @@ def test_copy_password_and_auto_clear(qapp, window):
     assert window._clipboard_token == "secret-a"
     window._clear_clipboard()
     assert QApplication.clipboard().text() == ""
+
+
+def test_detail_panel_shows_selected_record(qapp, window):
+    window.table.selectRow(0)
+    qapp.processEvents()
+    assert window.detail_panel.isVisible()
+    assert "example.com" in window.detail_title.text()
+
+
+def test_detail_panel_hides_after_category_switch(qapp, window):
+    window.table.selectRow(0)
+    qapp.processEvents()
+    window._switch_category("ideas")
+    qapp.processEvents()
+    assert not window.detail_panel.isVisible()
+
+
+def test_password_generator_fills_field(qapp, tmp_path):
+    from PyQt6.QtWidgets import QLineEdit
+
+    from suibianji.ui.main_window import ItemDialog
+
+    dialog = ItemDialog("accounts", app_settings=AppSettings(str(tmp_path)))
+    dialog._fill_generated_password()
+    text = dialog._pwd_field.text()
+    assert len(text) >= 20
+    assert dialog._pwd_field.echoMode() == QLineEdit.EchoMode.Normal
+    assert "强度" in dialog.pwd_strength_label.text()
+
+
+def test_window_geometry_is_persisted(qapp, tmp_path):
+    def make_window():
+        dm = DataManager(str(tmp_path))
+        if dm.is_first_time():
+            dm.initialize_first_time("pw123456")
+        return SuibianjiApp(dm, AppSettings(str(tmp_path)))
+
+    win = make_window()
+    win.setGeometry(140, 120, 1000, 700)
+    win.close()
+    qapp.processEvents()
+
+    reopened = make_window()
+    assert reopened.geometry().width() >= 1000
+    assert reopened.geometry().height() >= 700
+    reopened.close()

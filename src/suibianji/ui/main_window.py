@@ -1,5 +1,6 @@
 """主窗口、记录对话框与设置界面。"""
 
+import logging
 import time
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -39,6 +42,7 @@ from PyQt6.QtWidgets import (
 
 from .. import __version__
 from ..core.data_manager import DataManager
+from ..core.password_tools import generate_password, password_strength
 from ..core.settings import AppSettings
 from .theme import (
     CLIPBOARD_CLEAR_MS,
@@ -52,6 +56,8 @@ from .theme import (
     StyledTextEdit,
     line_icon,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ItemDialog(QDialog):
@@ -164,7 +170,7 @@ class ItemDialog(QDialog):
                 ]
             )
 
-        for _field_key, label_text, widget, multiline in self.fields:
+        for field_key, label_text, widget, multiline in self.fields:
             field_layout = QVBoxLayout()
             field_layout.setSpacing(7)
             field_layout.setContentsMargins(0, 0, 0, 0)
@@ -176,7 +182,15 @@ class ItemDialog(QDialog):
 
             if multiline:
                 widget.setMinimumHeight(96)
-            field_layout.addWidget(widget)
+            if field_key == "password" and isinstance(widget, QLineEdit):
+                field_layout.addWidget(self._build_password_row(widget))
+                self.pwd_strength_label = QLabel("")
+                self.pwd_strength_label.setFont(QFont("Microsoft YaHei UI", 8))
+                field_layout.addWidget(self.pwd_strength_label)
+                widget.textChanged.connect(self._refresh_strength)
+                self._refresh_strength()
+            else:
+                field_layout.addWidget(widget)
             content_layout.addLayout(field_layout)
             content_layout.addSpacing(14)
 
@@ -323,6 +337,72 @@ class ItemDialog(QDialog):
                     widget.setText(value or "")
 
             self.fields.append((field_key, label_text, widget, multiline))
+
+    def _build_password_row(self, field: QLineEdit) -> QWidget:
+        """密码输入行:输入框 + 显示/隐藏 + 生成。"""
+        self._pwd_field = field
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(field, stretch=1)
+
+        self.reveal_btn = QPushButton("显示")
+        self.reveal_btn.setCheckable(True)
+        self.reveal_btn.setFixedSize(56, 38)
+        self.reveal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reveal_btn.setStyleSheet(self._small_button_style())
+        self.reveal_btn.toggled.connect(self._toggle_password_visibility)
+        layout.addWidget(self.reveal_btn)
+
+        generate_btn = QPushButton("生成")
+        generate_btn.setFixedSize(56, 38)
+        generate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        generate_btn.setToolTip("生成 20 位随机密码(大小写 + 数字 + 符号)")
+        generate_btn.setStyleSheet(self._small_button_style())
+        generate_btn.clicked.connect(self._fill_generated_password)
+        layout.addWidget(generate_btn)
+        return row
+
+    @staticmethod
+    def _small_button_style() -> str:
+        return f"""
+            QPushButton {{
+                background-color: {COLORS['bg_surface']};
+                color: {COLORS['text_dark']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 9px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['bg_light']};
+                border-color: #D9D3C4;
+            }}
+            QPushButton:checked {{
+                background-color: {COLORS['accent_soft']};
+                color: {COLORS['primary']};
+                border-color: {COLORS['primary']};
+            }}
+        """
+
+    def _toggle_password_visibility(self, visible: bool):
+        self._pwd_field.setEchoMode(
+            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
+        self.reveal_btn.setText("隐藏" if visible else "显示")
+
+    def _fill_generated_password(self):
+        self._pwd_field.setText(generate_password(20))
+        self._pwd_field.setEchoMode(QLineEdit.EchoMode.Normal)
+        self.reveal_btn.setChecked(True)
+
+    def _refresh_strength(self):
+        level, label, percent = password_strength(self._pwd_field.text())
+        colors = ["#B05A45", "#B07A3C", "#8A7F52", "#3D5F52", "#2F5D50"]
+        self.pwd_strength_label.setText(f"强度:{label} · {percent}%")
+        self.pwd_strength_label.setStyleSheet(
+            f"color: {colors[level]}; font-size: 11px;"
+        )
 
     def _save(self):
         self.result_data = {}
@@ -605,6 +685,7 @@ class SettingsDialog(QDialog):
         """)
         self.tabs.addTab(self._create_general_tab(), "常规")
         self.tabs.addTab(self._create_security_tab(), "安全")
+        self.tabs.addTab(self._create_backup_tab(), "备份")
         self.tabs.addTab(self._create_types_tab(), "类型管理")
         layout.addWidget(self.tabs)
 
@@ -775,6 +856,120 @@ class SettingsDialog(QDialog):
         for field in (self.old_pwd_input, self.new_pwd_input, self.confirm_new_pwd_input):
             field.clear()
         return True
+
+    def _create_backup_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(24, 20, 24, 16)
+        layout.setSpacing(10)
+
+        info = QLabel(
+            "每次保存都会自动生成滚动备份,默认保留最近 7 份。\n"
+            "恢复前会先把当前数据另存一份,误操作也能找回。"
+        )
+        info.setFont(QFont("Microsoft YaHei UI", 9))
+        info.setStyleSheet(f"color: {COLORS['text_gray']};")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.backup_list = QListWidget()
+        self.backup_list.setFont(QFont("Microsoft YaHei UI", 9))
+        self.backup_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {COLORS['bg_light']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 10px;
+                padding: 6px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-radius: 8px;
+                color: {COLORS['text_dark']};
+            }}
+            QListWidget::item:selected {{
+                background-color: {COLORS['accent_soft']};
+                color: {COLORS['primary']};
+            }}
+        """)
+        layout.addWidget(self.backup_list, stretch=1)
+
+        self.backup_status = QLabel("")
+        self.backup_status.setFont(QFont("Microsoft YaHei UI", 8))
+        self.backup_status.setStyleSheet(f"color: {COLORS['text_faint']};")
+        layout.addWidget(self.backup_status)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        backup_btn = StyledButton("立即备份", StyledButton.BUTTON_STYLE_PRIMARY)
+        backup_btn.setFixedSize(96, 34)
+        backup_btn.clicked.connect(self._on_backup_now)
+        btn_row.addWidget(backup_btn)
+
+        restore_btn = StyledButton("恢复所选", StyledButton.BUTTON_STYLE_DANGER)
+        restore_btn.setFixedSize(96, 34)
+        restore_btn.clicked.connect(self._on_restore_selected)
+        btn_row.addWidget(restore_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._refresh_backup_list()
+        return tab
+
+    @staticmethod
+    def _format_backup_time(name: str) -> str:
+        stem = name.removeprefix("records-").removesuffix(".enc")
+        parts = stem.split("-")
+        if len(parts) >= 2:
+            date, clock = parts[0], parts[1]
+            if len(date) == 8 and len(clock) == 6:
+                return f"{date[:4]}-{date[4:6]}-{date[6:]} {clock[:2]}:{clock[2:4]}"
+        return stem
+
+    def _refresh_backup_list(self):
+        self.backup_list.clear()
+        backups = self.data_manager.list_backups()
+        for path in backups:
+            try:
+                size_kb = path.stat().st_size / 1024
+            except OSError:
+                size_kb = 0
+            item = QListWidgetItem(f"{self._format_backup_time(path.name)} · {size_kb:.1f} KB")
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self.backup_list.addItem(item)
+        self.backup_status.setText(f"共 {len(backups)} 份备份 · 保留最近 7 份")
+
+    def _on_backup_now(self):
+        path = self.data_manager.create_backup()
+        self._refresh_backup_list()
+        if path is None:
+            self.backup_status.setText("当前还没有可备份的数据")
+        else:
+            self.backup_status.setText(f"已备份: {path.name}")
+
+    def _on_restore_selected(self):
+        item = self.backup_list.currentItem()
+        if item is None:
+            QMessageBox.warning(self, "提示", "请先在列表中选择一份备份")
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        reply = QMessageBox.question(
+            self, "确认恢复",
+            f"确定用「{item.text()}」覆盖当前数据吗?\n恢复前会自动备份当前状态。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if not self.data_manager.restore_backup(path):
+                QMessageBox.warning(self, "恢复失败", "备份文件不存在或数据未解锁")
+                return
+        except ValueError as e:
+            QMessageBox.warning(self, "恢复失败", str(e))
+            return
+        self._refresh_backup_list()
+        self.backup_status.setText("已恢复备份,关闭设置后列表会刷新")
 
     def _create_types_tab(self) -> QWidget:
         tab = QWidget()
@@ -1053,7 +1248,11 @@ class SuibianjiApp(QMainWindow):
         # 已由用户授权缓存(开启免密即代表同意存入系统钥匙串),不增加额外攻击面。
         self.current_password = current_password
 
-        self.current_category = "accounts"
+        self._ui_state = self.app_settings.ui_state
+        saved_category = self._ui_state.get("category")
+        self.current_category = (
+            saved_category if saved_category in self.CATEGORY_CONFIG else "accounts"
+        )
         self.selected_item_id: str | None = None
         self.filtered_records: list = []
 
@@ -1066,13 +1265,51 @@ class SuibianjiApp(QMainWindow):
         self._last_activity = time.monotonic()
 
         self._setup_ui()
+        self._restore_geometry()
         self._load_data()
         self._setup_lifecycle()
 
+    def _restore_geometry(self):
+        geometry = self._ui_state.get("geometry")
+        if isinstance(geometry, list) and len(geometry) == 4:
+            try:
+                x, y, w, h = (int(v) for v in geometry)
+            except (TypeError, ValueError):
+                return
+            if w >= 800 and h >= 600:
+                self.setGeometry(x, y, w, h)
+
+    def _save_ui_state(self):
+        try:
+            geometry = self.geometry()
+            columns = dict(self._ui_state.get("columns") or {})
+            if self.table.columnCount():
+                columns[self.current_category] = [
+                    self.table.columnWidth(i) for i in range(self.table.columnCount())
+                ]
+            self._ui_state = {
+                **self._ui_state,
+                "geometry": [geometry.x(), geometry.y(), geometry.width(), geometry.height()],
+                "category": self.current_category,
+                "columns": columns,
+            }
+            self.app_settings.update_ui_state(**self._ui_state)
+        except Exception:
+            logger.warning("保存界面状态失败", exc_info=True)
+
+    def closeEvent(self, event):
+        self._save_ui_state()
+        super().closeEvent(event)
+
     def _setup_lifecycle(self):
         """快捷键、闲置检测、事件过滤器。"""
-        self._lock_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
-        self._lock_shortcut.activated.connect(self.lock)
+        self._shortcuts = []
+        self._bind_shortcut("Ctrl+L", self.lock)
+        self._bind_shortcut("Ctrl+N", self._add_item)
+        self._bind_shortcut("Ctrl+F", self._focus_search)
+        self._bind_shortcut("Esc", self._clear_search)
+        self._bind_shortcut("Ctrl+C", self._copy_primary, target_widget=self.table)
+        self._bind_shortcut("Delete", self._delete_item, target_widget=self.table)
 
         self._idle_timer = QTimer(self)
         self._idle_timer.timeout.connect(self._check_idle)
@@ -1082,7 +1319,33 @@ class SuibianjiApp(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
 
+    def _bind_shortcut(self, key: str, handler, target_widget=None):
+        target = target_widget or self
+        shortcut = QShortcut(QKeySequence(key), target)
+        if target_widget is not None:
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(handler)
+        self._shortcuts.append(shortcut)
+
+    def _focus_search(self):
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _clear_search(self):
+        if self.search_input.text():
+            self.search_input.clear()
+
+    def _copy_primary(self):
+        """Ctrl+C:复制当前记录的主字段(账号为密码)。"""
+        if self.table.currentRow() < 0:
+            return
+        self._copy_field_value(self.PRIMARY_FIELDS.get(self.current_category, "content"))
+
     def eventFilter(self, obj, event):
+        if obj is self.table and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._edit_item()
+                return True
         if event.type() in (
             QEvent.Type.MouseButtonPress,
             QEvent.Type.KeyPress,
@@ -1552,6 +1815,7 @@ class SuibianjiApp(QMainWindow):
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.setItemDelegate(RowAccentDelegate(self.table))
         self.table.cellClicked.connect(self._on_row_clicked)
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
@@ -1566,7 +1830,14 @@ class SuibianjiApp(QMainWindow):
         self.empty_label.hide()
         table_layout.addWidget(self.empty_label, stretch=1)
 
-        content_layout.addWidget(table_container, stretch=1)
+        table_row = QWidget()
+        table_row_layout = QHBoxLayout(table_row)
+        table_row_layout.setContentsMargins(0, 0, 0, 0)
+        table_row_layout.setSpacing(12)
+        table_row_layout.addWidget(table_container, stretch=1)
+        self.detail_panel = self._build_detail_panel()
+        table_row_layout.addWidget(self.detail_panel)
+        content_layout.addWidget(table_row, stretch=1)
         content_layout.addSpacing(12)
 
         footer = QLabel("右键任意记录可快速复制字段 / AES-256 加密")
@@ -1579,6 +1850,13 @@ class SuibianjiApp(QMainWindow):
         parent_layout.addWidget(content, stretch=1)
 
     # 分类配置,集中管理各分类的元数据
+    # Ctrl+C 在各分类下复制的"主字段"
+    PRIMARY_FIELDS = {
+        "accounts": "password",
+        "ideas": "content",
+        "wallets": "address",
+        "prompts": "content",
+    }
     # fields 元组:(field_key, label, table_mode, searchable)
     #   table_mode: "text" 原值 | "mask" 掩码 | "truncate" 截断 | "tags" join 标签
     #   searchable: 是否参与搜索匹配
@@ -1820,12 +2098,173 @@ class SuibianjiApp(QMainWindow):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, col, item)
 
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.filtered_records = records
+        self._apply_column_widths(len(headers))
         self._sync_page_meta(len(records))
+        self._hide_detail_panel()
+
+    def _apply_column_widths(self, column_count: int):
+        """有记录过的列宽就沿用,否则按窗口宽度均分。"""
+        header = self.table.horizontalHeader()
+        saved = (self._ui_state.get("columns") or {}).get(self.current_category)
+        if saved and len(saved) == column_count and column_count > 0:
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            for index, width in enumerate(saved):
+                self.table.setColumnWidth(index, max(60, int(width)))
+        else:
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def _on_row_clicked(self, row, col):
         self.selected_item_id = self._get_record_id(row)
+        self._update_detail_panel(row)
+
+    FIELD_LABELS = {
+        "account_type": "类型",
+        "website": "网站",
+        "username": "用户名",
+        "password": "密码",
+        "url": "网址",
+        "notes": "备注",
+        "title": "标题",
+        "content": "内容",
+        "tags": "标签",
+        "name": "名称",
+        "address": "地址",
+        "wallet_type": "类型",
+        "category": "分类",
+    }
+
+    def _build_detail_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("detailPanel")
+        panel.setFixedWidth(304)
+        panel.setStyleSheet(f"""
+            QFrame#detailPanel {{
+                background-color: {COLORS['bg_surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 16px;
+            }}
+        """)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        caption = QLabel("详情")
+        caption.setFont(QFont("Microsoft YaHei UI", 8))
+        caption.setStyleSheet(f"color: {COLORS['text_faint']};")
+        head.addWidget(caption)
+        head.addStretch()
+        close_btn = QPushButton("收起")
+        close_btn.setFixedSize(44, 24)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(ItemDialog._small_button_style())
+        close_btn.clicked.connect(self._hide_detail_panel)
+        head.addWidget(close_btn)
+        layout.addLayout(head)
+
+        self.detail_title = QLabel("")
+        self.detail_title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.DemiBold))
+        self.detail_title.setStyleSheet(f"color: {COLORS['text_dark']};")
+        self.detail_title.setWordWrap(True)
+        layout.addWidget(self.detail_title)
+
+        self.detail_body = QWidget()
+        self.detail_body_layout = QVBoxLayout(self.detail_body)
+        self.detail_body_layout.setContentsMargins(0, 0, 0, 0)
+        self.detail_body_layout.setSpacing(12)
+        self.detail_body_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        scroll.setWidget(self.detail_body)
+        layout.addWidget(scroll, stretch=1)
+
+        panel.hide()
+        return panel
+
+    def _hide_detail_panel(self):
+        if hasattr(self, "detail_panel"):
+            self.detail_panel.hide()
+
+    def _clear_detail_body(self):
+        while self.detail_body_layout.count() > 1:
+            item = self.detail_body_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _update_detail_panel(self, row: int):
+        if not (0 <= row < len(self.filtered_records)):
+            self._hide_detail_panel()
+            return
+
+        record = self.filtered_records[row]
+        config = self.CATEGORY_CONFIG[self.current_category]
+        fields = config.get("edit_fields") or [f[0] for f in config["fields"]]
+
+        title = ""
+        for key in ("website", "title", "name"):
+            title = (getattr(record, key, "") or "").strip()
+            if title:
+                break
+        self.detail_title.setText(title or "未命名记录")
+
+        self._clear_detail_body()
+        for field_key in fields:
+            value = getattr(record, field_key, None)
+            if field_key == config.get("tags_field"):
+                text = ", ".join(value) if value else ""
+            elif field_key == "password":
+                text = "••••••••" if value else ""
+            else:
+                text = str(value or "")
+            row_widget = self._build_detail_row(field_key, text)
+            self.detail_body_layout.insertWidget(self.detail_body_layout.count() - 1, row_widget)
+
+        self.detail_panel.show()
+
+    def _build_detail_row(self, field_key: str, value: str) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        label = QLabel(self.FIELD_LABELS.get(field_key, field_key))
+        label.setFont(QFont("Microsoft YaHei UI", 8))
+        label.setStyleSheet(f"color: {COLORS['text_faint']};")
+        head.addWidget(label)
+        head.addStretch()
+
+        copy_btn = QPushButton("复制")
+        copy_btn.setFixedSize(40, 22)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(ItemDialog._small_button_style())
+        copy_btn.clicked.connect(lambda _checked=False, key=field_key: self._copy_field_value(key))
+        head.addWidget(copy_btn)
+        layout.addLayout(head)
+
+        value_label = QLabel(value or "—")
+        value_label.setFont(QFont("Microsoft YaHei UI", 9))
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        value_label.setStyleSheet(
+            f"color: {COLORS['text_dark'] if value else COLORS['text_faint']};"
+        )
+        layout.addWidget(value_label)
+        return row
+
+    def _on_selection_changed(self):
+        row = self.table.currentRow()
+        if row < 0 or not self.table.selectionModel().hasSelection():
+            self._hide_detail_panel()
+        else:
+            self._update_detail_panel(row)
 
     def _get_record_id(self, row: int) -> str | None:
         """根据行号获取记录ID"""

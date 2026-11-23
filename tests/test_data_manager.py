@@ -310,3 +310,43 @@ def test_interrupted_password_change_is_rolled_back(data_manager):
     assert not journal.exists()
     dm2.initialize_with_password("old-password")
     assert dm2.record_manager.accounts[0].password == "keepme"
+
+
+# ---------- 手动备份与恢复 ----------
+def test_manual_backup_then_restore(data_manager):
+    data_manager.initialize_first_time("pw123456")
+    data_manager.add_account("邮箱", "w1", "u1", "p1")
+
+    backup = data_manager.create_backup()
+    assert backup is not None and backup.exists()
+
+    data_manager.add_account("邮箱", "w2", "u2", "p2")
+    assert len(data_manager.record_manager.accounts) == 2
+
+    assert data_manager.restore_backup(backup)
+    assert len(data_manager.record_manager.accounts) == 1
+    assert data_manager.record_manager.accounts[0].username == "u1"
+
+
+def test_restore_rejects_corrupt_backup(data_manager):
+    data_manager.initialize_first_time("pw123456")
+    data_manager.add_account("邮箱", "w1", "u1", "p1")
+    backup = data_manager.create_backup()
+
+    backup.write_bytes(b"not-a-valid-token")
+    with pytest.raises(ValueError):
+        data_manager.restore_backup(backup)
+    # 原数据不受影响
+    assert len(data_manager.record_manager.accounts) == 1
+
+
+def test_restore_keeps_current_state_copy(data_manager):
+    data_manager.initialize_first_time("pw123456")
+    data_manager.add_account("邮箱", "w1", "u1", "p1")
+    backup = data_manager.create_backup()
+    data_manager.add_account("邮箱", "w2", "u2", "p2")
+
+    assert data_manager.restore_backup(backup)
+    backups = list(data_manager.data_dir.glob("backup-*"))
+    assert backups, "恢复前应把当前状态另存一份"
+    assert any((b / "records.enc").exists() for b in backups)
