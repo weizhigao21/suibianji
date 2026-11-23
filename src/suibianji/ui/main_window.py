@@ -1268,6 +1268,7 @@ class SuibianjiApp(QMainWindow):
         self._tray = None
         self._hotkey_filter = None
         self._hotkey_desc = ""
+        self._key_mode_locked = False
 
         # 剪贴板与锁定状态
         self._locking = False
@@ -1415,9 +1416,15 @@ class SuibianjiApp(QMainWindow):
             self._show_from_tray()
 
     def _show_from_tray(self):
+        if self._key_mode_locked and not self._unlock_key_mode():
+            return
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def activate_from_instance(self):
+        """第二个实例启动时唤起本窗口(无主密码模式会自动解锁)。"""
+        self._show_from_tray()
 
     def _quit_app(self):
         self._force_quit = True
@@ -1572,6 +1579,19 @@ class SuibianjiApp(QMainWindow):
             QApplication.clipboard().clear()
             self._last_activity = time.monotonic()
 
+            # .key 密钥文件模式没有主密码:清空内存后收进托盘,点托盘即静默解锁
+            if self.data_manager.has_legacy_key():
+                self._key_mode_locked = True
+                self._load_data_placeholder()
+                if self._tray is not None:
+                    self._tray.showMessage(
+                        "随便记",
+                        "已锁定并清空内存,点击托盘图标即可继续(此数据无主密码)。",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2500,
+                    )
+                return
+
             while True:
                 dialog = PasswordDialog(PasswordDialog.MODE_VERIFY, self.data_manager)
                 if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -1592,6 +1612,28 @@ class SuibianjiApp(QMainWindow):
             self.activateWindow()
         finally:
             self._locking = False
+
+    def _load_data_placeholder(self):
+        """锁定后清空表格并从内存卸载数据,界面保持空态。"""
+        self.table.setRowCount(0)
+        self.filtered_records = []
+        self._hide_detail_panel()
+        self.empty_label.setText("已锁定\n点击托盘图标继续")
+        self.empty_label.show()
+        self.table.hide()
+
+    def _unlock_key_mode(self) -> bool:
+        """无主密码的 .key 数据:重新读取密钥文件解密,无需任何输入。"""
+        try:
+            self.data_manager.initialize_with_legacy_key()
+        except Exception as e:
+            QMessageBox.critical(None, "解锁失败", f"读取密钥文件失败: {e}")
+            return False
+        self.current_password = None
+        self._key_mode_locked = False
+        self._last_activity = time.monotonic()
+        self._load_data()
+        return True
 
     def _setup_ui(self):
         # 主样式:纸面色底 + 无边框表格 + 细描边表头

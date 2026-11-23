@@ -133,9 +133,7 @@ def main():
             return
         if window.isMinimized():
             window.showNormal()
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        window.activate_from_instance()
 
     guard = SingleInstanceGuard(socket_name(data_dir), _activate_existing)
     if not guard.acquire():
