@@ -126,3 +126,17 @@ def test_search_result_jumps_to_row(qapp, window):
     qapp.processEvents()
     assert window.selected_item_id == target.id
     assert window.table.currentRow() == window.filtered_records.index(target)
+
+
+def test_detail_panel_shows_live_totp_code(qapp, window):
+    account = window.data_manager.add_account(
+        "邮箱", "totp.example.com", "alice", "secret-c", totp_secret="JBSWY3DPEHPK3PXP"
+    )
+    window._load_data()
+    qapp.processEvents()
+    row = window.filtered_records.index(account)
+    window.table.selectRow(row)
+    qapp.processEvents()
+    assert window._totp_label is not None
+    assert "剩" in window._totp_label.text()
+    assert len(window._totp_code) == 6

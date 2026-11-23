@@ -13,7 +13,8 @@ a = Analysis(
         'suibianji', 'suibianji.core', 'suibianji.core.data_manager',
         'suibianji.core.models', 'suibianji.core.paths', 'suibianji.core.settings',
         'suibianji.core.single_instance', 'suibianji.ui', 'suibianji.ui.app_icon',
-        'suibianji.ui.main_window', 'suibianji.ui.theme',
+        'suibianji.core.hotkey', 'suibianji.core.totp', 'suibianji.ui.main_window',
+        'suibianji.ui.search_dialog', 'suibianji.ui.theme',
     ],
     hooksconfig={},
     runtime_hooks=[],
@@ -38,7 +39,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -48,4 +49,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=False,
+    version='version_info.txt',
 )
+

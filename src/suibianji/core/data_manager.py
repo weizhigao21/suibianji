@@ -364,7 +364,8 @@ class DataManager:
 
     # ---------- CRUD ----------
     def add_account(self, account_type: str, website: str, username: str, password: str,
-                    url: str | None = None, notes: str | None = None) -> AccountPassword:
+                    url: str | None = None, notes: str | None = None,
+                    totp_secret: str = "") -> AccountPassword:
         account = AccountPassword(
             id=str(uuid.uuid4()),
             account_type=account_type,
@@ -372,7 +373,8 @@ class DataManager:
             username=username,
             password=password,
             url=url,
-            notes=notes
+            notes=notes,
+            totp_secret=totp_secret,
         )
         self.record_manager.accounts.append(account)
         self._save_data()

@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 
 
@@ -11,6 +11,7 @@ class AccountPassword:
     account_type: str = ""
     url: str | None = None
     notes: str | None = None
+    totp_secret: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -93,8 +94,13 @@ class RecordManager:
     @classmethod
     def from_dict(cls, data: dict):
         manager = cls()
-        manager.accounts = [AccountPassword(**acc) for acc in data.get('accounts', [])]
-        manager.ideas = [Idea(**idea) for idea in data.get('ideas', [])]
-        manager.wallets = [WalletAddress(**wallet) for wallet in data.get('wallets', [])]
-        manager.prompts = [AIPrompt(**prompt) for prompt in data.get('prompts', [])]
+        # 只接收模型已知字段:旧数据缺字段走默认值,未来新增字段不会让旧版本崩溃
+        def build(model, raw):
+            known = {f.name for f in fields(model)}
+            return model(**{k: v for k, v in raw.items() if k in known})
+
+        manager.accounts = [build(AccountPassword, acc) for acc in data.get('accounts', [])]
+        manager.ideas = [build(Idea, idea) for idea in data.get('ideas', [])]
+        manager.wallets = [build(WalletAddress, wallet) for wallet in data.get('wallets', [])]
+        manager.prompts = [build(AIPrompt, prompt) for prompt in data.get('prompts', [])]
         return manager

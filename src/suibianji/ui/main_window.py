@@ -46,6 +46,7 @@ from ..core.data_manager import DataManager
 from ..core.hotkey import GlobalHotkeyFilter
 from ..core.password_tools import generate_password, password_strength
 from ..core.settings import AppSettings
+from ..core.totp import totp_code
 from .app_icon import app_icon
 from .search_dialog import GlobalSearchDialog, QuickCaptureDialog
 from .theme import (
@@ -144,6 +145,7 @@ class ItemDialog(QDialog):
                     ("website", "网站", False),
                     ("username", "用户名", False),
                     ("password", "密码", True),
+                    ("totp_secret", "两步验证密钥(TOTP,可留空)", False),
                     ("url", "网址", False),
                     ("notes", "备注", False, True),
                 ]
@@ -1275,6 +1277,14 @@ class SuibianjiApp(QMainWindow):
         self._clipboard_timer.timeout.connect(self._clear_clipboard)
         self._last_activity = time.monotonic()
 
+        # TOTP 详情行(每秒刷新验证码与倒计时)
+        self._totp_label = None
+        self._totp_secret = ""
+        self._totp_code = ""
+        self._totp_timer = QTimer(self)
+        self._totp_timer.setInterval(1000)
+        self._totp_timer.timeout.connect(self._refresh_totp_row)
+
         self._setup_ui()
         self._restore_geometry()
         self._load_data()
@@ -2070,6 +2080,7 @@ class SuibianjiApp(QMainWindow):
                 "website",
                 "username",
                 "password",
+                "totp_secret",
                 "url",
                 "notes",
             ],
@@ -2351,6 +2362,8 @@ class SuibianjiApp(QMainWindow):
         "website": "网站",
         "username": "用户名",
         "password": "密码",
+        "totp_secret": "两步验证密钥",
+        "totp_code": "当前验证码",
         "url": "网址",
         "notes": "备注",
         "title": "标题",
@@ -2417,8 +2430,10 @@ class SuibianjiApp(QMainWindow):
     def _hide_detail_panel(self):
         if hasattr(self, "detail_panel"):
             self.detail_panel.hide()
+        self._stop_totp_row()
 
     def _clear_detail_body(self):
+        self._stop_totp_row()
         while self.detail_body_layout.count() > 1:
             item = self.detail_body_layout.takeAt(0)
             widget = item.widget()
@@ -2443,17 +2458,85 @@ class SuibianjiApp(QMainWindow):
 
         self._clear_detail_body()
         for field_key in fields:
+            if field_key == "totp_secret":
+                continue  # 密钥不展示,改由下方动态验证码行呈现
             value = getattr(record, field_key, None)
             if field_key == config.get("tags_field"):
                 text = ", ".join(value) if value else ""
             elif field_key == "password":
                 text = "••••••••" if value else ""
+            elif field_key == "totp_secret":
+                text = "已设置(详情面板显示当前验证码)" if value else ""
             else:
                 text = str(value or "")
             row_widget = self._build_detail_row(field_key, text)
             self.detail_body_layout.insertWidget(self.detail_body_layout.count() - 1, row_widget)
 
+        if getattr(record, "totp_secret", ""):
+            self._append_totp_row(record)
+        else:
+            self._stop_totp_row()
+
         self.detail_panel.show()
+
+    def _append_totp_row(self, record):
+        """详情面板里的动态验证码行:每 30 秒滚动,可一键复制。"""
+        self._totp_secret = (getattr(record, "totp_secret", "") or "").strip()
+
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        label = QLabel("当前验证码")
+        label.setFont(QFont("Microsoft YaHei UI", 8))
+        label.setStyleSheet(f"color: {COLORS['text_faint']};")
+        head.addWidget(label)
+        head.addStretch()
+        copy_btn = QPushButton("复制")
+        copy_btn.setFixedSize(40, 22)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(ItemDialog._small_button_style())
+        copy_btn.clicked.connect(self._copy_totp_code)
+        head.addWidget(copy_btn)
+        layout.addLayout(head)
+
+        self._totp_label = QLabel("")
+        self._totp_label.setFont(QFont("Consolas", 12, QFont.Weight.DemiBold))
+        self._totp_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._totp_label.setStyleSheet(f"color: {COLORS['primary']};")
+        layout.addWidget(self._totp_label)
+
+        self.detail_body_layout.insertWidget(self.detail_body_layout.count() - 1, row)
+        self._refresh_totp_row()
+        self._totp_timer.start()
+
+    def _refresh_totp_row(self):
+        if self._totp_label is None or not self._totp_secret:
+            return
+        try:
+            code, remain = totp_code(self._totp_secret)
+        except (ValueError, TypeError):
+            self._totp_label.setText("密钥格式无效")
+            self._totp_code = ""
+            self._totp_timer.stop()
+            return
+        self._totp_code = code
+        self._totp_label.setText(f"{code[:3]} {code[3:]}   ·   剩 {remain}s")
+
+    def _stop_totp_row(self):
+        self._totp_timer.stop()
+        self._totp_label = None
+        self._totp_secret = ""
+        self._totp_code = ""
+
+    def _copy_totp_code(self):
+        if not self._totp_code:
+            return
+        QApplication.clipboard().setText(self._totp_code)
+        self.show_toast("验证码已复制,约 30 秒后失效")
 
     def _build_detail_row(self, field_key: str, value: str) -> QWidget:
         row = QWidget()
