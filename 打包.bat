@@ -90,11 +90,11 @@ if not exist "dist\随便记.exe" (
 )
 
 echo [5/5] 生成版本 ZIP…
-powershell -NoProfile -Command "Set-Location 'dist'; $exe = Get-ChildItem -Filter *.exe | Select-Object -First 1; if (-not $exe) { exit 1 }; Compress-Archive -LiteralPath $exe.Name -DestinationPath 'suibianji-1.1.0-win64.zip' -Force"
+powershell -NoProfile -Command "Set-Location 'dist'; $exe = Get-ChildItem -Filter *.exe | Select-Object -First 1; if (-not $exe) { exit 1 }; Compress-Archive -LiteralPath $exe.Name -DestinationPath 'suibianji-1.2.0-win64.zip' -Force"
 if errorlevel 1 (
     echo [提示] ZIP 生成失败，可直接分发 dist\随便记.exe。
 ) else (
-    echo 版本 ZIP: %~dp0dist\suibianji-1.1.0-win64.zip
+    echo 版本 ZIP: %~dp0dist\suibianji-1.2.0-win64.zip
 )
 
 echo.
@@ -103,7 +103,7 @@ echo    打包完成！
 echo ============================================
 echo 产物目录: %~dp0dist\
 echo 主程序:   %~dp0dist\随便记.exe
-echo 版本 ZIP: %~dp0dist\suibianji-1.1.0-win64.zip
+echo 版本 ZIP: %~dp0dist\suibianji-1.2.0-win64.zip
 echo.
 echo 请分发上面生成的 EXE 或版本 ZIP，首次运行无需安装 Python。
 echo data 目录优先使用 exe 同级 data，不可写时回退到 %%APPDATA%%\Suibianji\data，已存在的记录不会被覆盖。
@@ -121,4 +121,5 @@ echo [错误] 打包未完成，请查看上方日志定位原因。
 if /i "%~1"=="--no-pause" exit /b 1
 pause
 exit /b 1
+
 

@@ -85,3 +85,19 @@ def test_remember_period_rejects_just_over_window(tmp_path):
     s._data["remember_password_until"] = until.isoformat()
     s._save()
     assert not s.is_remember_period_valid()
+
+
+# ---------- 界面状态持久化 ----------
+def test_ui_state_roundtrip(tmp_path):
+    s = AppSettings(data_dir=str(tmp_path))
+    s.update_ui_state(geometry=[120, 80, 1000, 700], category="ideas", columns={"ideas": [200, 300]})
+    s2 = AppSettings(data_dir=str(tmp_path))
+    assert s2.ui_state["category"] == "ideas"
+    assert s2.ui_state["geometry"] == [120, 80, 1000, 700]
+    assert s2.ui_state["columns"]["ideas"] == [200, 300]
+
+
+def test_ui_state_ignores_broken_value(tmp_path):
+    s = AppSettings(data_dir=str(tmp_path))
+    s._data["ui_state"] = "broken"
+    assert s.ui_state == {}

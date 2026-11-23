@@ -319,6 +319,49 @@ class DataManager:
                 logger.warning("写入备份失败,继续保存主文件: %s", e)
         self._atomic_write(self.data_file, encrypted)
 
+    # ---------- 备份管理 ----------
+    def list_backups(self):
+        """按时间倒序列出滚动备份。"""
+        if not self.backups_dir.exists():
+            return []
+        return sorted(self.backups_dir.glob("records-*.enc"), reverse=True)
+
+    def create_backup(self) -> Path | None:
+        """手动备份当前密文;尚无数据文件时返回 None。"""
+        if not self.data_file.exists():
+            return None
+        self.backups_dir.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = self.backups_dir / f"records-{stamp}.enc"
+        index = 1
+        while target.exists():
+            target = self.backups_dir / f"records-{stamp}-{index}.enc"
+            index += 1
+        shutil.copy2(self.data_file, target)
+        return target
+
+    def restore_backup(self, source) -> bool:
+        """恢复到指定备份;恢复前把当前状态另存一份,失败不动原数据。"""
+        source = Path(source)
+        if not source.exists() or self.cipher is None:
+            return False
+        try:
+            payload = self.cipher.decrypt(self._read_bytes(source))
+            json.loads(payload.decode("utf-8"))
+        except Exception as e:
+            logger.warning("备份文件无法解密: %s", e)
+            raise ValueError("该备份与当前主密码不匹配或已损坏") from e
+
+        self.create_backup()
+        rollback = self.data_dir / f"backup-{datetime.now():%Y%m%d-%H%M%S}"
+        rollback.mkdir(exist_ok=True)
+        if self.data_file.exists():
+            shutil.copy2(self.data_file, rollback / self.data_file.name)
+
+        self._atomic_write(self.data_file, self._read_bytes(source))
+        self._load_data()
+        return True
+
     # ---------- CRUD ----------
     def add_account(self, account_type: str, website: str, username: str, password: str,
                     url: str | None = None, notes: str | None = None) -> AccountPassword:
