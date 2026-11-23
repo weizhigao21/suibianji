@@ -1,7 +1,5 @@
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Optional, List
-import json
 
 
 @dataclass
@@ -11,8 +9,8 @@ class AccountPassword:
     username: str
     password: str
     account_type: str = ""
-    url: Optional[str] = None
-    notes: Optional[str] = None
+    url: str | None = None
+    notes: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -28,7 +26,7 @@ class Idea:
     id: str
     title: str
     content: str
-    tags: List[str] = None
+    tags: list[str] = None
     created_at: str = ""
     updated_at: str = ""
     
@@ -47,7 +45,7 @@ class WalletAddress:
     name: str
     address: str
     wallet_type: str
-    notes: Optional[str] = None
+    notes: str | None = None
     created_at: str = ""
     updated_at: str = ""
     
@@ -64,7 +62,7 @@ class AIPrompt:
     title: str
     content: str
     category: str = ""
-    tags: List[str] = None
+    tags: list[str] = None
     created_at: str = ""
     updated_at: str = ""
     
@@ -79,10 +77,10 @@ class AIPrompt:
 
 class RecordManager:
     def __init__(self):
-        self.accounts: List[AccountPassword] = []
-        self.ideas: List[Idea] = []
-        self.wallets: List[WalletAddress] = []
-        self.prompts: List[AIPrompt] = []
+        self.accounts: list[AccountPassword] = []
+        self.ideas: list[Idea] = []
+        self.wallets: list[WalletAddress] = []
+        self.prompts: list[AIPrompt] = []
     
     def to_dict(self):
         return {

@@ -1,8 +1,6 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
-
 
 DEFAULT_REMEMBER_HOURS = 24
 # until 与 now 的最大允许间隔(小时),超出视为篡改或时钟错乱
@@ -89,7 +87,7 @@ class AppSettings:
         except Exception:
             return False
 
-    def refresh_remember_period(self, hours: Optional[int] = None):
+    def refresh_remember_period(self, hours: int | None = None):
         """登录成功/开启记住密码时刷新有效期。"""
         if not self.remember_password_enabled:
             return

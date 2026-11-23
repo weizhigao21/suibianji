@@ -1,5 +1,5 @@
 """settings 模块测试:免密登录有效期、账号类型管理。"""
-from settings import AppSettings
+from suibianji.core.settings import AppSettings
 
 
 def test_settings_defaults(tmp_path):
@@ -55,7 +55,8 @@ def test_account_types_strip_blanks(tmp_path):
 def test_remember_period_rejects_far_future_until(tmp_path):
     """防篡改:until 被改成很远的未来应拒绝(超出 MAX_REMEMBER_WINDOW_HOURS)。"""
     from datetime import datetime, timedelta
-    from settings import MAX_REMEMBER_WINDOW_HOURS
+
+    from suibianji.core.settings import MAX_REMEMBER_WINDOW_HOURS
     assert MAX_REMEMBER_WINDOW_HOURS == 48  # 锁定常量,防止误改
 
     s = AppSettings(data_dir=str(tmp_path))

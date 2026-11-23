@@ -3,12 +3,18 @@
 block_cipher = None
 
 a = Analysis(
-    ['src/main_qt6_redesigned.py'],
+    ['src/run_suibianji.py'],
     pathex=['src'],
     binaries=[],
     datas=[],
-    hiddenimports=['cryptography', 'PyQt6', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'logging.handlers'],
-    hookspath=[],
+    hiddenimports=[
+        'cryptography', 'PyQt6', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets',
+        'PyQt6.QtNetwork', 'logging.handlers',
+        'suibianji', 'suibianji.core', 'suibianji.core.data_manager',
+        'suibianji.core.models', 'suibianji.core.paths', 'suibianji.core.settings',
+        'suibianji.core.single_instance', 'suibianji.ui', 'suibianji.ui.app_icon',
+        'suibianji.ui.main_window', 'suibianji.ui.theme',
+    ],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],

@@ -18,7 +18,7 @@ def qapp():
 
 
 def test_second_instance_is_rejected(qapp):
-    from single_instance import SingleInstanceGuard, socket_name
+    from suibianji.core.single_instance import SingleInstanceGuard, socket_name
 
     name = socket_name(f"test-{uuid.uuid4()}")
     activated = []

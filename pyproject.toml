@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "suibianji"
+description = "本地加密的个人记录管理器(账号密码 / 想法 / 钱包地址 / AI 提示词)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "weizhigao21" }]
+dynamic = ["version"]
+dependencies = [
+    "cryptography>=41.0.0",
+    "PyQt6>=6.6.0",
+    "keyring>=25.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.5.0",
+]
+
+[project.gui-scripts]
+suibianji = "suibianji.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "suibianji.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F", "B", "UP", "I"]
+ignore = ["E501"]

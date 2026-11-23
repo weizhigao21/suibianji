@@ -1,5 +1,5 @@
 """models 模块测试:数据模型默认值、时间戳、序列化往返。"""
-from models import AccountPassword, Idea, WalletAddress, AIPrompt, RecordManager
+from suibianji.core.models import AccountPassword, AIPrompt, Idea, RecordManager, WalletAddress
 
 
 def test_account_password_defaults():

@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-import paths
+from suibianji.core import paths
 
 
 def test_env_override_wins(tmp_path, monkeypatch):

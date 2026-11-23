@@ -12,7 +12,11 @@
 - 主密码保护
   - PBKDF2-SHA256 派生密钥,600,000 次迭代
   - 数据原子写入 + 自动备份
+  - 每次保存生成滚动备份(保留 7 份),主文件损坏可自动恢复
+  - 支持在设置中修改主密码,改密过程带 journal 回滚
   - 可选一天内免密登录(使用系统钥匙串保存主密码)
+  - 闲置 10 分钟自动锁定,`Ctrl+L` 立即锁定,锁定后清空内存中的记录
+  - 复制密码 25 秒后自动清空剪贴板(仅清除自己写入的内容)
 - 数据操作
   - 添加、编辑、删除
   - 搜索过滤
@@ -53,8 +57,23 @@ pip install -r requirements.txt
 ## 运行应用
 
 ```bash
-python src/main_qt6_redesigned.py
+python -m suibianji
 ```
+
+也可以直接运行 `python src/run_suibianji.py`(打包入口),或安装后使用 `suibianji` 命令。
+
+## 开发
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+pip install -r requirements-lock.txt
+pip install -e . --no-deps
+pytest
+ruff check src tests
+```
+
+依赖以 `requirements-lock.txt` 为准(锁定版本,可复现构建);`requirements.txt` 只声明直接依赖的最低版本。
 
 ## 打包为可执行文件
 
@@ -77,19 +96,20 @@ pyinstaller suibianji.spec
 ```
 随便记/
 ├── src/
-│   ├── main_qt6_redesigned.py   # 主程序入口与 UI
-│   ├── data_manager.py          # 加密数据读写与管理
-│   ├── models.py                # 数据模型
-│   └── settings.py              # 应用设置(免密登录、账号类型等)
-├── data/                        # 运行时数据目录
-│   ├── .salt                    # PBKDF2 salt
-│   ├── .verify                  # 验证 token
-│   ├── records.enc              # 加密记录
-│   ├── records.enc.bak          # 自动备份
-│   └── settings.json            # 应用设置
+│   ├── suibianji/
+│   │   ├── __main__.py          # 入口:日志、旧数据导入、登录流程
+│   │   ├── core/                # 模型、加密存储、设置、路径、单实例
+│   │   └── ui/                  # 主题与控件、主窗口与对话框、图标
+│   ├── run_suibianji.py         # PyInstaller 打包入口
+│   └── main_qt6_redesigned.py   # 旧入口兼容 shim(保留一个版本周期)
+├── tests/                       # pytest 用例(核心逻辑 + 单实例 + 路径)
+├── docs/优化任务方案.md         # 迭代计划与任务编号
+├── .github/workflows/ci.yml     # Windows 上跑 lint、测试、打包
+├── data/                        # 运行时数据目录(默认同级,见上文定位规则)
 ├── suibianji.spec               # PyInstaller 打包配置
-├── requirements.txt             # Python 依赖
-└── README.md                    # 本文件
+├── requirements.txt             # 直接依赖
+├── requirements-lock.txt        # 锁定版本(CI 与本地开发使用)
+└── README.md
 ```
 
 ## 数据安全说明
