@@ -50,6 +50,8 @@ class DataManager:
         self.legacy_key_file = self.data_dir / ".key"
         self.cipher: Optional[Fernet] = None
         self.record_manager: Optional[RecordManager] = None
+        # 上次改密若在写文件中途崩溃,这里先回滚到改密前的完整状态
+        self._recover_interrupted_password_change()
 
     # ---------- 密钥派生 ----------
     def _derive_key(self, password: str, salt: bytes) -> bytes:
@@ -138,6 +140,73 @@ class DataManager:
         self._atomic_write(self.salt_file, salt)
         self.cipher = Fernet(self._derive_key(password, salt))
         self._write_verification()
+
+    # ---------- 修改主密码 ----------
+    def _snapshot_for_rollback(self) -> Path:
+        """把当前加密文件整套复制到 backup-时间戳,改密失败/中断时用于还原。"""
+        snapshot = self.data_dir / f"backup-{datetime.now():%Y%m%d-%H%M%S}"
+        snapshot.mkdir(exist_ok=True)
+        for path in (self.salt_file, self.verify_file, self.data_file, self.backup_file):
+            if path.exists():
+                shutil.copy2(path, snapshot / path.name)
+        return snapshot
+
+    def _restore_snapshot(self, snapshot: Path):
+        for name in (self.salt_file.name, self.verify_file.name,
+                     self.data_file.name, self.backup_file.name):
+            source = snapshot / name
+            if source.exists():
+                shutil.copy2(source, self.data_dir / name)
+
+    def _recover_interrupted_password_change(self):
+        """启动时若发现改密中断(journal 残留),还原到改密前的状态。"""
+        journal = self.data_dir / ".password-change"
+        if not journal.exists():
+            return
+        try:
+            info = json.loads(journal.read_text(encoding="utf-8"))
+            snapshot = self.data_dir / info["backup"]
+            if snapshot.is_dir():
+                self._restore_snapshot(snapshot)
+                logger.warning("检测到未完成的改密操作,已回滚到 %s", snapshot.name)
+        except Exception as e:
+            logger.warning("改密回滚失败,请从备份目录手动恢复: %s", e)
+        finally:
+            journal.unlink(missing_ok=True)
+
+    def change_password(self, old_password: str, new_password: str) -> bool:
+        """校验旧密码后更换主密码,重新加密整库;失败自动回滚。"""
+        if not self.verify_password(old_password):
+            return False
+        if len(new_password) < 8:
+            raise ValueError("新主密码至少需要 8 个字符")
+        if self.record_manager is None:
+            raise RuntimeError("数据尚未解锁,无法修改主密码")
+
+        snapshot = self._snapshot_for_rollback()
+        journal = self.data_dir / ".password-change"
+        journal.write_text(json.dumps({"backup": snapshot.name}), encoding="utf-8")
+        try:
+            payload = json.dumps(self.record_manager.to_dict(),
+                                 ensure_ascii=False, indent=2).encode("utf-8")
+            salt = self._generate_salt()
+            cipher = Fernet(self._derive_key(new_password, salt))
+            encrypted = cipher.encrypt(payload)
+            token = cipher.encrypt(VERIFICATION_TOKEN)
+            # 先自检:新密钥必须能解回同样的数据
+            if json.loads(cipher.decrypt(encrypted).decode("utf-8")) != self.record_manager.to_dict():
+                raise RuntimeError("改密自检失败,已保留原数据")
+
+            self._atomic_write(self.data_file, encrypted)
+            self._atomic_write(self.verify_file, token)
+            self._atomic_write(self.salt_file, salt)
+            self.cipher = cipher
+            journal.unlink(missing_ok=True)
+            return True
+        except Exception:
+            self._restore_snapshot(snapshot)
+            journal.unlink(missing_ok=True)
+            raise
 
     # ---------- 启动入口 ----------
     def has_legacy_key(self) -> bool:

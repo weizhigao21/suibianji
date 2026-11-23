@@ -240,3 +240,72 @@ def test_recovery_from_rotating_backup_when_main_and_bak_corrupt(data_manager):
     # 最新的滚动备份是第二次写入前的状态(1 条)
     assert len(dm2.record_manager.accounts) == 1
     assert dm2.record_manager.accounts[0].username == "u1"
+
+
+# ---------- 修改主密码 ----------
+def test_change_password_roundtrip(data_manager):
+    data_manager.initialize_first_time("old-password")
+    data_manager.add_account("邮箱", "w", "u", "keepme")
+
+    assert data_manager.change_password("old-password", "new-password-2026")
+    assert not data_manager.verify_password("old-password")
+
+    dm2 = DataManager(data_dir=data_manager.data_dir)
+    dm2.initialize_with_password("new-password-2026")
+    assert dm2.record_manager.accounts[0].password == "keepme"
+
+
+def test_change_password_rejects_wrong_old(data_manager):
+    data_manager.initialize_first_time("old-password")
+    assert not data_manager.change_password("wrong", "another-password")
+    assert data_manager.verify_password("old-password")
+
+
+def test_change_password_rejects_short_new(data_manager):
+    data_manager.initialize_first_time("old-password")
+    with pytest.raises(ValueError):
+        data_manager.change_password("old-password", "short")
+
+
+def test_change_password_rolls_back_on_failure(data_manager, monkeypatch):
+    """写文件失败时必须回滚,旧密码仍能打开原数据。"""
+    data_manager.initialize_first_time("old-password")
+    data_manager.add_account("邮箱", "w", "u", "keepme")
+
+    failing = {"armed": True}
+    original = DataManager._atomic_write
+
+    def flaky(self, path, payload):
+        if failing["armed"] and path == self.salt_file:
+            raise OSError("disk full")
+        return original(self, path, payload)
+
+    monkeypatch.setattr(DataManager, "_atomic_write", flaky)
+    with pytest.raises(OSError):
+        data_manager.change_password("old-password", "new-password-2026")
+
+    failing["armed"] = False
+    dm2 = DataManager(data_dir=data_manager.data_dir)
+    dm2.initialize_with_password("old-password")
+    assert dm2.record_manager.accounts[0].password == "keepme"
+
+
+def test_interrupted_password_change_is_rolled_back(data_manager):
+    """journal 残留(改密中途崩溃)时,启动阶段应回滚到改密前状态。"""
+    data_manager.initialize_first_time("old-password")
+    data_manager.add_account("邮箱", "w", "u", "keepme")
+
+    snapshot = data_manager.data_dir / "backup-20260101-000000"
+    snapshot.mkdir()
+    for path in (data_manager.salt_file, data_manager.verify_file, data_manager.data_file):
+        (snapshot / path.name).write_bytes(path.read_bytes())
+
+    journal = data_manager.data_dir / ".password-change"
+    journal.write_text(json.dumps({"backup": snapshot.name}), encoding="utf-8")
+    # 模拟写到一半:主文件被破坏
+    data_manager.data_file.write_bytes(b"half-written")
+
+    dm2 = DataManager(data_dir=data_manager.data_dir)
+    assert not journal.exists()
+    dm2.initialize_with_password("old-password")
+    assert dm2.record_manager.accounts[0].password == "keepme"

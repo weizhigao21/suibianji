@@ -1,5 +1,6 @@
 import sys
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -33,7 +34,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyle,
 )
-from PyQt6.QtCore import Qt, QSize, QRectF, QLineF, QUrl
+from PyQt6.QtCore import Qt, QSize, QRectF, QLineF, QUrl, QTimer, QEvent
 from PyQt6.QtGui import (
     QFont,
     QColor,
@@ -45,6 +46,8 @@ from PyQt6.QtGui import (
     QPen,
     QPainterPath,
     QDesktopServices,
+    QKeySequence,
+    QShortcut,
 )
 from data_manager import DataManager
 from settings import AppSettings
@@ -88,6 +91,11 @@ COLORS = {
     "row_hover": "#FBF9F4",
     "row_selected": "#F3F6F1",
 }
+
+# 闲置多久自动锁定(秒)
+IDLE_LOCK_SECONDS = 10 * 60
+# 复制密码后自动清空剪贴板的时长(毫秒)
+CLIPBOARD_CLEAR_MS = 25_000
 
 
 def line_icon(name: str, color: str, size: int = 18) -> QPixmap:
@@ -900,9 +908,10 @@ class SettingsDialog(QDialog):
         self.data_manager = data_manager
         # 当前主密码(内存),用于开启免密登录时立即缓存到 keyring
         self.current_password = current_password
+        self._password_changed = False
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.setFixedSize(560, 430)
+        self.setFixedSize(560, 480)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_surface']}; }}")
         self._setup_ui()
 
@@ -950,6 +959,7 @@ class SettingsDialog(QDialog):
             }}
         """)
         self.tabs.addTab(self._create_general_tab(), "常规")
+        self.tabs.addTab(self._create_security_tab(), "安全")
         self.tabs.addTab(self._create_types_tab(), "类型管理")
         layout.addWidget(self.tabs)
 
@@ -1026,6 +1036,100 @@ class SettingsDialog(QDialog):
     def _open_data_dir(self):
         """在文件管理器中打开数据目录。"""
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.data_manager.data_dir).resolve())))
+
+    def _create_security_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(24, 20, 24, 16)
+        layout.setSpacing(10)
+
+        info = QLabel("修改主密码会重新加密整个数据库。修改前会自动生成完整备份,失败时自动回滚。")
+        info.setFont(QFont("Microsoft YaHei UI", 9))
+        info.setStyleSheet(f"color: {COLORS['text_gray']};")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.old_pwd_input = self._password_field("当前主密码")
+        self.new_pwd_input = self._password_field("新主密码")
+        self.confirm_new_pwd_input = self._password_field("确认新主密码")
+        for field in (self.old_pwd_input, self.new_pwd_input, self.confirm_new_pwd_input):
+            layout.addWidget(field)
+
+        hint = QLabel("至少 8 个字符,建议包含字母、数字和符号。")
+        hint.setFont(QFont("Microsoft YaHei UI", 8))
+        hint.setStyleSheet(f"color: {COLORS['text_faint']};")
+        layout.addWidget(hint)
+
+        self.pwd_error_label = QLabel("")
+        self.pwd_error_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.pwd_error_label.setStyleSheet(f"color: {COLORS['error']};")
+        self.pwd_error_label.setWordWrap(True)
+        self.pwd_error_label.hide()
+        layout.addWidget(self.pwd_error_label)
+
+        if self.data_manager.has_legacy_key():
+            legacy_note = QLabel(
+                "当前使用旧版 .key 密钥文件,没有主密码可修改。\n"
+                "如需启用主密码加密,请先迁移数据(迁移功能将在后续版本提供)。")
+            legacy_note.setFont(QFont("Microsoft YaHei UI", 8))
+            legacy_note.setStyleSheet(f"color: {COLORS['warning']};")
+            legacy_note.setWordWrap(True)
+            layout.addWidget(legacy_note)
+            for field in (self.old_pwd_input, self.new_pwd_input, self.confirm_new_pwd_input):
+                field.setEnabled(False)
+
+        layout.addStretch()
+        return tab
+
+    @staticmethod
+    def _password_field(placeholder: str) -> "StyledInput":
+        field = StyledInput()
+        field.setEchoMode(QLineEdit.EchoMode.Password)
+        field.setPlaceholderText(placeholder)
+        return field
+
+    def _set_pwd_error(self, message: str):
+        self.pwd_error_label.setText(message)
+        self.pwd_error_label.setVisible(bool(message))
+
+    def _apply_password_change(self) -> bool:
+        """安全页填了密码就执行改密;返回 False 表示校验失败,对话框不应关闭。"""
+        old = self.old_pwd_input.text()
+        new = self.new_pwd_input.text()
+        confirm = self.confirm_new_pwd_input.text()
+        if not (old or new or confirm):
+            return True
+        if self.data_manager.has_legacy_key():
+            self._set_pwd_error("当前为旧版密钥文件模式,没有主密码可修改。")
+            return False
+        if not old:
+            self._set_pwd_error("请输入当前主密码。")
+            return False
+        if len(new) < 8:
+            self._set_pwd_error("新主密码至少需要 8 个字符。")
+            return False
+        if new != confirm:
+            self._set_pwd_error("两次输入的新密码不一致。")
+            self.confirm_new_pwd_input.clear()
+            return False
+        try:
+            changed = self.data_manager.change_password(old, new)
+        except Exception as e:
+            self._set_pwd_error(f"修改失败,已回滚到原数据: {e}")
+            return False
+        if not changed:
+            self._set_pwd_error("当前主密码不正确,请重试。")
+            return False
+
+        self.current_password = new
+        self._password_changed = True
+        if self.app_settings.remember_password_enabled:
+            self.data_manager.cache_password(new)
+            self.app_settings.refresh_remember_period()
+        self._set_pwd_error("")
+        for field in (self.old_pwd_input, self.new_pwd_input, self.confirm_new_pwd_input):
+            field.clear()
+        return True
 
     def _create_types_tab(self) -> QWidget:
         tab = QWidget()
@@ -1141,6 +1245,10 @@ class SettingsDialog(QDialog):
         return texts
 
     def _on_save(self):
+        # 安全:改主密码(校验失败则保持对话框打开)
+        if not self._apply_password_change():
+            return
+
         # 常规(密钥文件模式无主密码,跳过免密登录逻辑)
         if not self.data_manager.has_legacy_key():
             enabled = self.remember_checkbox.isChecked()
@@ -1304,8 +1412,83 @@ class SuibianjiApp(QMainWindow):
         self.selected_item_id: Optional[str] = None
         self.filtered_records: list = []
 
+        # 剪贴板与锁定状态
+        self._locking = False
+        self._clipboard_token = ""
+        self._clipboard_timer = QTimer(self)
+        self._clipboard_timer.setSingleShot(True)
+        self._clipboard_timer.timeout.connect(self._clear_clipboard)
+        self._last_activity = time.monotonic()
+
         self._setup_ui()
         self._load_data()
+        self._setup_lifecycle()
+
+    def _setup_lifecycle(self):
+        """快捷键、闲置检测、事件过滤器。"""
+        self._lock_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        self._lock_shortcut.activated.connect(self.lock)
+
+        self._idle_timer = QTimer(self)
+        self._idle_timer.timeout.connect(self._check_idle)
+        self._idle_timer.start(60_000)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.KeyPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.Wheel,
+        ):
+            self._last_activity = time.monotonic()
+        return super().eventFilter(obj, event)
+
+    def _check_idle(self):
+        if self._locking:
+            return
+        if time.monotonic() - self._last_activity >= IDLE_LOCK_SECONDS:
+            self.lock()
+
+    def lock(self):
+        """锁定:清空内存中的记录与密码,校验通过后重新加载。"""
+        if self._locking:
+            return
+        self._locking = True
+        try:
+            self.hide()
+            self.table.setRowCount(0)
+            self.filtered_records = []
+            self.selected_item_id = None
+            self.data_manager.record_manager = None
+            self.data_manager.cipher = None
+            self._clipboard_token = ""
+            QApplication.clipboard().clear()
+            self._last_activity = time.monotonic()
+
+            while True:
+                dialog = PasswordDialog(PasswordDialog.MODE_VERIFY, self.data_manager)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    QApplication.quit()
+                    return
+                password = dialog.get_password()
+                try:
+                    self.data_manager.initialize_with_password(password)
+                    break
+                except Exception as e:
+                    QMessageBox.critical(None, "解锁失败", f"数据加载失败: {e}")
+
+            self.current_password = password
+            self._last_activity = time.monotonic()
+            self._load_data()
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        finally:
+            self._locking = False
 
     def _setup_ui(self):
         # 主样式:纸面色底 + 无边框表格 + 细描边表头
@@ -1518,7 +1701,31 @@ class SuibianjiApp(QMainWindow):
         self.settings_btn.clicked.connect(self._show_settings)
         sidebar_layout.addWidget(self.settings_btn)
 
-        version_label = QLabel("v1.0.0 · Paperlight")
+        self.lock_btn = QPushButton("  锁定")
+        self.lock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lock_btn.setFixedHeight(38)
+        self.lock_btn.setIcon(QIcon(line_icon("shield", "#5C594F", 17)))
+        self.lock_btn.setIconSize(QSize(17, 17))
+        self.lock_btn.setToolTip("立即锁定(Ctrl+L)")
+        self.lock_btn.setStyleSheet(f"""
+            QPushButton {{
+                text-align: left;
+                background-color: transparent;
+                color: #2A2A26;
+                border: none;
+                border-radius: 10px;
+                padding: 0 10px;
+                font-size: 12.5px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: #EDE9DE;
+            }}
+        """)
+        self.lock_btn.clicked.connect(self.lock)
+        sidebar_layout.addWidget(self.lock_btn)
+
+        version_label = QLabel("v1.0.1 · Paperlight")
         version_font = QFont("Microsoft YaHei UI", 7)
         version_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.6)
         version_label.setFont(version_font)
@@ -2085,13 +2292,47 @@ class SuibianjiApp(QMainWindow):
             self._load_data()
 
     def _copy_field_value(self, field_key: str):
-        """复制当前选中记录的指定字段到剪贴板。"""
+        """复制当前选中记录的指定字段到剪贴板,密码类字段定时自动清空。"""
         record_id = self._get_record_id(self.table.currentRow())
         if not record_id:
             return
         data = self._get_record_by_id(record_id)
         value = data.get(field_key, "")
-        QApplication.clipboard().setText("" if value is None else str(value))
+        text = "" if value is None else str(value)
+        QApplication.clipboard().setText(text)
+
+        if field_key == "password" and text:
+            self._clipboard_token = text
+            self._clipboard_timer.start(CLIPBOARD_CLEAR_MS)
+            self.show_toast(f"密码已复制,{CLIPBOARD_CLEAR_MS // 1000} 秒后自动清空剪贴板")
+        else:
+            self.show_toast("已复制")
+
+    def _clear_clipboard(self):
+        """只清空自己写入的内容,避免清掉用户后来复制的东西。"""
+        clipboard = QApplication.clipboard()
+        if self._clipboard_token and clipboard.text() == self._clipboard_token:
+            clipboard.clear()
+        self._clipboard_token = ""
+
+    def show_toast(self, text: str, duration: int = 1800):
+        """在主窗口底部显示一条短暂提示。"""
+        toast = QLabel(text, self)
+        toast.setFont(QFont("Microsoft YaHei UI", 9))
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: #2A2A26;
+                color: #FBF9F3;
+                border-radius: 10px;
+                padding: 9px 16px;
+            }
+        """)
+        toast.adjustSize()
+        rect = self.rect()
+        toast.move(rect.center().x() - toast.width() // 2, rect.bottom() - 96)
+        toast.show()
+        toast.raise_()
+        QTimer.singleShot(duration, toast.deleteLater)
 
     def _show_context_menu(self, pos):
         # 先选中鼠标所在的行,避免操作到上一次选中的记录
@@ -2156,6 +2397,10 @@ class SuibianjiApp(QMainWindow):
         dialog = SettingsDialog(self.app_settings, self.data_manager,
                                 current_password=self.current_password, parent=self)
         dialog.exec()
+        # 设置里可能改了主密码,同步内存中的旧密码(用于免密缓存)
+        if getattr(dialog, "_password_changed", False) and dialog.current_password:
+            self.current_password = dialog.current_password
+            self.show_toast("主密码已更新,下次登录请使用新密码")
         # 设置里可能增删了账号类型,重载以同步筛选项
         self._load_data()
 
