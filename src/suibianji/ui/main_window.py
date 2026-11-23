@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -42,8 +43,11 @@ from PyQt6.QtWidgets import (
 
 from .. import __version__
 from ..core.data_manager import DataManager
+from ..core.hotkey import GlobalHotkeyFilter
 from ..core.password_tools import generate_password, password_strength
 from ..core.settings import AppSettings
+from .app_icon import app_icon
+from .search_dialog import GlobalSearchDialog, QuickCaptureDialog
 from .theme import (
     CLIPBOARD_CLEAR_MS,
     COLORS,
@@ -1255,6 +1259,13 @@ class SuibianjiApp(QMainWindow):
         )
         self.selected_item_id: str | None = None
         self.filtered_records: list = []
+        # 排序状态、托盘与全局热键
+        self._sort_column: int | None = None
+        self._sort_desc = False
+        self._force_quit = False
+        self._tray = None
+        self._hotkey_filter = None
+        self._hotkey_desc = ""
 
         # 剪贴板与锁定状态
         self._locking = False
@@ -1299,6 +1310,17 @@ class SuibianjiApp(QMainWindow):
 
     def closeEvent(self, event):
         self._save_ui_state()
+        # 默认「关闭即收进托盘」:托盘可用且非明确退出时仅隐藏,应用继续后台待命
+        if not self._force_quit and self._tray is not None and self._tray.isVisible():
+            event.ignore()
+            self.hide()
+            self._tray.showMessage(
+                "随便记",
+                f"已收进托盘,{self._hotkey_desc or '托盘菜单'}可快速记录;托盘右键可退出。",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+            return
         super().closeEvent(event)
 
     def _setup_lifecycle(self):
@@ -1307,6 +1329,7 @@ class SuibianjiApp(QMainWindow):
         self._bind_shortcut("Ctrl+L", self.lock)
         self._bind_shortcut("Ctrl+N", self._add_item)
         self._bind_shortcut("Ctrl+F", self._focus_search)
+        self._bind_shortcut("Ctrl+K", self._open_global_search)
         self._bind_shortcut("Esc", self._clear_search)
         self._bind_shortcut("Ctrl+C", self._copy_primary, target_widget=self.table)
         self._bind_shortcut("Delete", self._delete_item, target_widget=self.table)
@@ -1318,6 +1341,9 @@ class SuibianjiApp(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
+
+        self._setup_global_hotkey()
+        self._setup_tray()
 
     def _bind_shortcut(self, key: str, handler, target_widget=None):
         target = target_widget or self
@@ -1340,6 +1366,165 @@ class SuibianjiApp(QMainWindow):
         if self.table.currentRow() < 0:
             return
         self._copy_field_value(self.PRIMARY_FIELDS.get(self.current_category, "content"))
+
+    # ---------- 托盘与快速记录 ----------
+    def _setup_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._tray = QSystemTrayIcon(app_icon(), self)
+        self._tray.setToolTip("随便记 · 本地加密")
+
+        menu = QMenu(self)
+        open_action = QAction("打开主窗口", self)
+        open_action.triggered.connect(self._show_from_tray)
+        menu.addAction(open_action)
+
+        capture_text = "快速记录"
+        if self._hotkey_desc:
+            capture_text = f"快速记录 ({self._hotkey_desc})"
+        capture_action = QAction(capture_text, self)
+        capture_action.triggered.connect(self._quick_capture)
+        menu.addAction(capture_action)
+
+        lock_action = QAction("锁定", self)
+        lock_action.triggered.connect(self.lock)
+        menu.addAction(lock_action)
+
+        menu.addSeparator()
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self._quit_app)
+        menu.addAction(quit_action)
+
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.DoubleClick,
+                      QSystemTrayIcon.ActivationReason.Trigger):
+            self._show_from_tray()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self):
+        self._force_quit = True
+        self._save_ui_state()
+        if self._hotkey_filter is not None:
+            self._hotkey_filter.unregister()
+        if self._tray is not None:
+            self._tray.hide()
+        QApplication.quit()
+
+    def _setup_global_hotkey(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+        # 没有系统托盘的环境(离屏/无桌面)不占用全局热键
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._hotkey_filter = GlobalHotkeyFilter(
+            lambda: QTimer.singleShot(0, self._quick_capture)
+        )
+        desc = self._hotkey_filter.register_candidates()
+        if desc:
+            self._hotkey_desc = desc
+            app.installNativeEventFilter(self._hotkey_filter)
+
+    def _quick_capture(self):
+        """全局热键/托盘唤起的快速记录。"""
+        if self.data_manager.record_manager is None:
+            self._show_from_tray()
+            QMessageBox.information(self, "已锁定", "请先解锁「随便记」再记录。")
+            return
+
+        dialog = QuickCaptureDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = dialog.text()
+        if not text:
+            return
+        title = text[:24] + ("…" if len(text) > 24 else "")
+        self.data_manager.add_idea(title, text)
+        self._update_category_count()
+        if self.current_category == "ideas":
+            self._load_data()
+        else:
+            self._populate_type_filter()
+        if self.isVisible():
+            self.show_toast("已保存一条想法")
+        elif self._tray is not None:
+            self._tray.showMessage("随便记", "已保存一条想法", QSystemTrayIcon.MessageIcon.Information, 2000)
+
+    # ---------- 全局搜索 ----------
+    def _open_global_search(self):
+        entries = []
+        for category, config in self.CATEGORY_CONFIG.items():
+            for record in self._get_category_records(category):
+                title = (
+                    getattr(record, "website", "")
+                    or getattr(record, "title", "")
+                    or getattr(record, "name", "")
+                    or ""
+                ).strip()
+                snippet = (
+                    getattr(record, "username", "")
+                    or getattr(record, "content", "")
+                    or getattr(record, "address", "")
+                    or getattr(record, "notes", "")
+                    or ""
+                ).strip()
+                entries.append({
+                    "category": category,
+                    "category_name": config["name"],
+                    "title": title,
+                    "snippet": snippet,
+                    "id": record.id,
+                })
+        dialog = GlobalSearchDialog(entries, self._open_search_result, parent=self)
+        dialog.exec()
+
+    def _open_search_result(self, category: str, record_id: str):
+        self._switch_category(category)
+        for row, record in enumerate(self.filtered_records):
+            if record.id == record_id:
+                self.table.selectRow(row)
+                item = self.table.item(row, 0)
+                if item is not None:
+                    self.table.scrollToItem(item)
+                self.selected_item_id = record_id
+                self._update_detail_panel(row)
+                break
+
+    # ---------- 排序 ----------
+    def _reset_sort(self):
+        self._sort_column = None
+        self._sort_desc = False
+        header = self.table.horizontalHeader()
+        header.setSortIndicatorShown(False)
+
+    def _on_header_clicked(self, column: int):
+        if self._sort_column == column:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_column = column
+            self._sort_desc = False
+        header = self.table.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(
+            column,
+            Qt.SortOrder.DescendingOrder if self._sort_desc else Qt.SortOrder.AscendingOrder,
+        )
+        self._refresh_records()
+
+    @staticmethod
+    def _sort_value(record, field_key: str) -> str:
+        value = getattr(record, field_key, None)
+        if isinstance(value, list):
+            return ", ".join(value).lower()
+        return str(value or "").lower()
 
     def eventFilter(self, obj, event):
         if obj is self.table and event.type() == QEvent.Type.KeyPress:
@@ -1813,6 +1998,7 @@ class SuibianjiApp(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.horizontalHeader().setFixedHeight(38)
         self.table.horizontalHeader().setHighlightSections(False)
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.table.setItemDelegate(RowAccentDelegate(self.table))
         self.table.cellClicked.connect(self._on_row_clicked)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
@@ -1870,6 +2056,9 @@ class SuibianjiApp(QMainWindow):
             "update_method": "update_account",
             "delete_method": "delete_account",
             "tags_field": None,
+            "filter_field": "account_type",
+            "filter_label": "类型",
+            "filter_empty_text": "未分类",
             "fields": [
                 ("account_type", "类型", "text", True),
                 ("website", "网站", "text", True),
@@ -1898,6 +2087,9 @@ class SuibianjiApp(QMainWindow):
             "update_method": "update_idea",
             "delete_method": "delete_idea",
             "tags_field": "tags",
+            "filter_field": "tags",
+            "filter_label": "标签",
+            "filter_empty_text": "无标签",
             "fields": [
                 ("title", "标题", "text", True),
                 ("content", "内容", "truncate", True),
@@ -1919,6 +2111,9 @@ class SuibianjiApp(QMainWindow):
             "update_method": "update_wallet",
             "delete_method": "delete_wallet",
             "tags_field": None,
+            "filter_field": "wallet_type",
+            "filter_label": "类型",
+            "filter_empty_text": "未分类",
             "fields": [
                 ("name", "名称", "text", True),
                 ("address", "地址", "text", True),
@@ -1942,6 +2137,9 @@ class SuibianjiApp(QMainWindow):
             "update_method": "update_prompt",
             "delete_method": "delete_prompt",
             "tags_field": None,
+            "filter_field": "category",
+            "filter_label": "分类",
+            "filter_empty_text": "未分类",
             "fields": [
                 ("title", "标题", "text", True),
                 ("content", "内容", "truncate", True),
@@ -1983,54 +2181,76 @@ class SuibianjiApp(QMainWindow):
         self.page_title.setText(config.get("name", ""))
         for name, widget in self.category_widgets.items():
             widget.set_active(name == category)
-        # 类型筛选只对"账号密码"有意义,切换分类时复位并显隐
-        is_accounts = category == "accounts"
-        self.type_filter_label.setVisible(is_accounts)
-        self.type_filter.setVisible(is_accounts)
-        if is_accounts:
-            self.type_filter.blockSignals(True)
-            self.type_filter.setCurrentIndex(0)
-            self.type_filter.blockSignals(False)
+        # 筛选控件跟随分类:账号按类型、想法按标签、钱包按类型、提示词按分类
+        self._reset_sort()
         self._load_data()
 
+    def _filter_field(self) -> str | None:
+        return self.CATEGORY_CONFIG.get(self.current_category, {}).get("filter_field")
+
+    def _filter_label(self) -> str:
+        return self.CATEGORY_CONFIG.get(self.current_category, {}).get("filter_label", "筛选")
+
     def _populate_type_filter(self):
-        """重建类型下拉项:设置中的类型 + 记录里实际出现过的类型。"""
+        """按当前分类的 filter_field 重建下拉项(含设置中预置的类型)。"""
+        field = self._filter_field()
+        visible = bool(field)
+        self.type_filter_label.setText(self._filter_label())
+        self.type_filter_label.setVisible(visible)
+        self.type_filter.setVisible(visible)
+        if not field:
+            self.type_filter.blockSignals(True)
+            self.type_filter.clear()
+            self.type_filter.blockSignals(False)
+            return
+
         previous = self.type_filter.currentData() if self.type_filter.count() else None
-        types = list(self.app_settings.account_types)
-        for record in self._get_category_records("accounts"):
-            record_type = (getattr(record, "account_type", "") or "").strip()
-            if record_type and record_type not in types:
-                types.append(record_type)
+        values = []
+        for record in self._get_category_records(self.current_category):
+            value = getattr(record, field, None)
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                text = str(candidate or "").strip()
+                if text and text not in values:
+                    values.append(text)
 
         self.type_filter.blockSignals(True)
         self.type_filter.clear()
-        self.type_filter.addItem("全部类型", None)
-        for type_name in types:
-            self.type_filter.addItem(type_name, type_name)
-        self.type_filter.addItem("未分类", "__untagged__")
+        self.type_filter.addItem(f"全部{self._filter_label()}", None)
+        for value in values:
+            self.type_filter.addItem(value, value)
+        empty_text = self.CATEGORY_CONFIG[self.current_category].get("filter_empty_text", "未分类")
+        self.type_filter.addItem(empty_text, "__untagged__")
         if previous is not None:
-            idx = self.type_filter.findData(previous)
-            if idx >= 0:
-                self.type_filter.setCurrentIndex(idx)
+            index = self.type_filter.findData(previous)
+            if index >= 0:
+                self.type_filter.setCurrentIndex(index)
         self.type_filter.blockSignals(False)
 
     def _type_filter_active(self) -> bool:
-        """当前是否处于类型筛选状态(仅账号分类有效)。"""
-        if self.current_category != "accounts" or not hasattr(self, "type_filter"):
+        """当前是否处于筛选状态。"""
+        if not self._filter_field() or not hasattr(self, "type_filter"):
             return False
         return self.type_filter.currentIndex() > 0
 
     def _matches_type_filter(self, record) -> bool:
-        """记录是否通过类型筛选。"""
-        if self.current_category != "accounts":
+        """记录是否通过当前分类的筛选。"""
+        field = self._filter_field()
+        if not field:
             return True
         selected = self.type_filter.currentData()
         if selected is None:
             return True
-        record_type = (getattr(record, "account_type", "") or "").strip()
+        value = getattr(record, field, None)
+        if isinstance(value, list):
+            tags = [str(v).strip() for v in value if str(v).strip()]
+            if selected == "__untagged__":
+                return not tags
+            return selected in tags
+        text = str(value or "").strip()
         if selected == "__untagged__":
-            return not record_type
-        return record_type == selected
+            return not text
+        return text == selected
 
     def _on_type_filter_changed(self, _index: int):
         """类型下拉变化时立即重新过滤表格。"""
@@ -2086,6 +2306,14 @@ class SuibianjiApp(QMainWindow):
         if text_lower:
             records = [r for r in records if self._record_matches_search(r, text_lower)]
         records = [r for r in records if self._matches_type_filter(r)]
+
+        if self._sort_column is not None and self._sort_column < len(config.get("fields", [])):
+            field_key = config["fields"][self._sort_column][0]
+            records = sorted(
+                records,
+                key=lambda r: self._sort_value(r, field_key),
+                reverse=self._sort_desc,
+            )
 
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
